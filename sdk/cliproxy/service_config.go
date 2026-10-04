@@ -155,6 +155,25 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 		log.WithError(errValidate).Warn("rejected invalid model catalog sources")
 		return configCommit{}
 	}
+	if _, errValidate := newCfg.QuotaAffinitySettings(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected quota affinity config update")
+		return configCommit{}
+	}
+	s.cfgMu.RLock()
+	previous := s.cfg
+	s.cfgMu.RUnlock()
+	oldProfile, errOld := previous.QuotaAffinitySettings()
+	newProfile, _ := newCfg.QuotaAffinitySettings()
+	if errOld != nil || oldProfile != newProfile {
+		log.Warn("rejected quota affinity profile change; restart required")
+		return configCommit{}
+	}
+	if s.coreManager != nil && s.coreManager.QuotaAffinityNamespace() != "" {
+		if errValidate := s.coreManager.ValidateQuotaAffinityReload(newCfg); errValidate != nil {
+			log.WithError(errValidate).Warn("rejected quota affinity reload")
+			return configCommit{}
+		}
+	}
 	s.cfgMu.Lock()
 	s.cfg = newCfg
 	s.cfgMu.Unlock()

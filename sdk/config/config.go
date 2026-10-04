@@ -8,6 +8,12 @@ import internalconfig "github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 
 type SDKConfig = internalconfig.SDKConfig
 
+// QuotaAffinityConfig configures the optional local routing profile
+type QuotaAffinityConfig = internalconfig.QuotaAffinityConfig
+
+// QuotaAffinitySettings contains validated profile settings
+type QuotaAffinitySettings = internalconfig.QuotaAffinitySettings
+
 type Config = internalconfig.Config
 
 type ModelCatalogs = internalconfig.ModelCatalogs

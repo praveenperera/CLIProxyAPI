@@ -194,6 +194,20 @@ routing:
   # Ignored when routing.session-affinity is false.
   session-affinity-rebind-on: "any"
 
+  # Optional local durable chat affinity; omit this block to keep legacy HTTP routing
+  # Requires authenticated callers and explicit X-CLIProxy-Chat-* headers
+  # Do not enable with Home, plugins, or session-affinity
+  # Strict Claude requires native Messages history; request hooks are rejected
+  # quota-aware-chat-affinity:
+  #   namespace: "local-chats"
+  #   state-dir: "/var/lib/cliproxy/chat-affinity" # outside auth-dir; one server per directory
+  #   idle-retention: "168h"
+  #   hard-retention: "720h"
+  #   max-bindings: 65536
+  #   max-quota-age: "5m"
+  #   poll-interval: "1m"
+  #   poll-concurrency: 4
+
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false
 

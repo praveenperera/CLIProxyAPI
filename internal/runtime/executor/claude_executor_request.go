@@ -1086,8 +1086,13 @@ func applyClaudeHeadersWithNativeProfile(
 		helperProfile = false
 		sessionIDs = nil
 	}
+	nativePreserve := helps.NativeHistoryPreservation(r.Context())
 	applyCLIFingerprint := fp.ProfileClaudeCodeCLI || wirePolicy.Cloak
 	preserveCallerFingerprint := !applyCLIFingerprint && !confirmedClaudeCode
+	if nativePreserve {
+		preserveCallerFingerprint = true
+		confirmedClaudeCode = false
+	}
 	useOAuthBetas := fp.UseOAuthBetas
 	isAnthropicBase := isAnthropicUpstreamURL(r.URL)
 	if strings.TrimSpace(apiKey) != "" {
@@ -1165,7 +1170,7 @@ func applyClaudeHeadersWithNativeProfile(
 	if preserveCallerFingerprint && advisorNeeded {
 		baseBetas = withClaudeAdvisorToolBeta(baseBetas)
 	}
-	if !claudeRequestSupportsEffort(body, nil) {
+	if !nativePreserve && !claudeRequestSupportsEffort(body, nil) {
 		baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 	}
 	existingSet := make(map[string]bool)
@@ -1223,6 +1228,14 @@ func applyClaudeHeadersWithNativeProfile(
 		}
 	}
 	applyBetaHeader := func() {
+		if nativePreserve {
+			if baseBetas != "" {
+				r.Header.Set("Anthropic-Beta", baseBetas)
+			} else {
+				r.Header.Del("Anthropic-Beta")
+			}
+			return
+		}
 		if wirePolicy.Uncloak {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeCodeBeta)
 			baseBetas = withoutClaudeBeta(baseBetas, claudeOAuthBeta)
@@ -1239,7 +1252,7 @@ func applyClaudeHeadersWithNativeProfile(
 			}
 		}
 		// Enforce strict native Claude Code 2.1.280 model & turn beta gating:
-		if !claudeRequestSupportsEffort(body, nil) {
+		if !nativePreserve && !claudeRequestSupportsEffort(body, nil) {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 		}
 		reqProbeOrHelper := helps.IsClaudeProbeOrHelperRequest(body)
@@ -1343,7 +1356,7 @@ func applyClaudeHeadersWithNativeProfile(
 			resetHeader("Accept", defaultAccept)
 			resetHeader("Accept-Encoding", defaultAcceptEncoding)
 		}
-		if isAnthropicBase {
+		if isAnthropicBase || nativePreserve {
 			applyBetaHeader()
 			restoreCallerTransport()
 		} else if stream {

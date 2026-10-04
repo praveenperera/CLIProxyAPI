@@ -102,7 +102,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 	var errDial error
 	dialCtx := ctx
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC)
+		conn, closer = existingWebsocketSessionConn(ctx, sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC)
 		if conn == nil {
 			unlockStreamSession()
 			if cliproxyexecutor.DownstreamWebsocket(ctx) && sess != nil {
@@ -180,7 +180,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 		}
 	}
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
-	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
+	if errSend := writeCodexWebsocketMessageContext(ctx, sess, conn, wsReqBody); errSend != nil {
 		errSend = mapCodexWebsocketWriteError(sess, conn, errSend)
 		helps.RecordAPIWebsocketError(ctx, e.cfg, "send", errSend)
 		if sess != nil && !isEphemeralSession && cliproxyexecutor.DownstreamWebsocket(ctx) {
@@ -248,7 +248,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 			recordAPIWebsocketHandshake(ctx, e.cfg, respHSRetry)
 			reporter.StartResponseTTFT()
 			cliproxyexecutor.MarkUpstreamAttempt(ctx)
-			if errSendRetry := writeCodexWebsocketMessage(sess, conn, wsReqBodyRetry); errSendRetry != nil {
+			if errSendRetry := writeCodexWebsocketMessageContext(ctx, sess, conn, wsReqBodyRetry); errSendRetry != nil {
 				errSendRetry = mapCodexWebsocketWriteError(sess, conn, errSendRetry)
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "send_retry", errSendRetry)
 				e.invalidateUpstreamConn(sess, conn, "send_error", errSendRetry)

@@ -142,7 +142,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		err = newCodexStatusErrWithHeadersAndCooling(httpResp.StatusCode, httpResp.Header, b, e.modelLevelCooling())
 		return resp, err
 	}
-	data, errRead := io.ReadAll(httpResp.Body)
+	data, errRead := helps.ReadCodexQuotaSSE(ctx, httpResp.Body)
 	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 
 	events := helps.NewCodexSSEScanner(ctx, bytes.NewReader(data), len(data)+1)

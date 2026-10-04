@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -24,6 +25,7 @@ type CodexWebsocketsExecutor struct {
 	*CodexExecutor
 
 	store *codexWebsocketSessionStore
+	now   func() time.Time
 }
 
 func NewCodexWebsocketsExecutor(cfg *config.Config) *CodexWebsocketsExecutor {
@@ -267,9 +269,15 @@ func (e *CodexWebsocketsExecutor) InterruptExecutionSession(ctx context.Context,
 	if !authEnabled {
 		return fmt.Errorf("websocket credential is no longer enabled")
 	}
-	if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
+	if errWrite := writeCodexWebsocketMessageContext(ctx, sess, conn, payload); errWrite != nil {
 		return errWrite
 	}
 	log.WithField("outcome", "forwarded").Debug("codex websockets: response.interrupt handled")
 	return nil
 }
+
+// LocalBuiltinProvider identifies the local built-in execution authority
+func (e *CodexAutoExecutor) LocalBuiltinProvider() string { return "codex" }
+
+// LocalBuiltinProvider identifies the local built-in execution authority
+func (e *CodexWebsocketsExecutor) LocalBuiltinProvider() string { return "codex" }

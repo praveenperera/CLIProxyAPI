@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+
 	tls "github.com/refraction-networking/utls"
 	internalcache "github.com/router-for-me/CLIProxyAPI/v8/internal/cache"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -467,5 +469,6 @@ func NewUtlsHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyau
 	if timeout > 0 {
 		client.Timeout = timeout
 	}
+	client.Transport = cliproxyexecutor.CredentialTransport(ctx, client.Transport)
 	return client
 }

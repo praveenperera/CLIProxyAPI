@@ -53,6 +53,14 @@ func (s *Service) Run(ctx context.Context) error {
 		s.homeMu.Unlock()
 	}()
 
+	if _, errProfile := s.cfg.QuotaAffinitySettings(); errProfile != nil {
+		return errProfile
+	}
+	if s.coreManager != nil {
+		if errProfile := s.coreManager.ConfigureQuotaAffinity(s.cfg); errProfile != nil {
+			return errProfile
+		}
+	}
 	s.startModelCatalogUpdaters(ctx)
 
 	usage.StartDefault(ctx)
@@ -120,6 +128,8 @@ func (s *Service) Run(ctx context.Context) error {
 			apiKeyResult = &APIKeyClientResult{}
 		}
 	}
+
+	s.startQuotaPoller(ctx)
 
 	// legacy clients removed; no caches to refresh
 
@@ -259,6 +269,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	}
 	var shutdownErr error
 	s.shutdownOnce.Do(func() {
+		s.stopQuotaPoller()
+
 		if ctx == nil {
 			ctx = context.Background()
 		}
@@ -390,6 +402,11 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 
 		usage.StopDefault()
+		if s.coreManager != nil {
+			if errClose := s.coreManager.CloseQuotaAffinity(); errClose != nil && shutdownErr == nil {
+				shutdownErr = errClose
+			}
+		}
 	})
 	return shutdownErr
 }

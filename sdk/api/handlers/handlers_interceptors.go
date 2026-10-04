@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 	"golang.org/x/net/context"
@@ -492,6 +493,13 @@ func interceptStreamChunk(ctx context.Context, host PluginInterceptorHost, req p
 
 func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context, handlerType, requestedModel, requestID string, req coreexecutor.Request, opts coreexecutor.Options, skipPluginID string) (coreexecutor.Request, coreexecutor.Options, *interfaces.ErrorMessage) {
 	host := h.interceptorHost()
+	policy := opts
+	if strictChat(ctx) {
+		policy = chatOptions(ctx, opts)
+	}
+	if requestInterceptorsEnabled(host) && !policy.RequestHooksAllowed() {
+		return req, opts, executionErrorMessage(affinity.NewError(affinity.PrefixTransformUnsupported, time.Time{}))
+	}
 	if !requestInterceptorsEnabled(host) {
 		return req, opts, nil
 	}

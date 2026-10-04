@@ -513,7 +513,7 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	idMapper := newXAIWebsocketRequestIDMapper(e.idStore, stateSessionID, req.Payload)
 	sessCfg := sess.effectiveConfig(authID, e.cfg)
 	if idMapper != nil {
-		if websocketSessionTargetChanged(sess, authID, wsURL, executionProxyURL(ctx, sessCfg, auth)) {
+		if websocketSessionTargetChanged(ctx, sess, authID, wsURL, executionProxyURL(ctx, sessCfg, auth)) {
 			idMapper.upstreamPreviousID = ""
 		}
 		prepared.body = idMapper.upstreamRequestPayload(prepared.body)
@@ -546,7 +546,7 @@ func (e *XAIWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	var respHS *http.Response
 	var errDial error
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sessCfg, auth))
+		conn, closer = existingWebsocketSessionConn(ctx, sess, authID, wsURL, executionProxyURL(ctx, sessCfg, auth))
 		if conn == nil {
 			unlockStreamSession()
 			return nil, cliproxyexecutor.NewUpstreamWebsocketReplayRequiredError()
@@ -1219,7 +1219,7 @@ func (e *XAIWebsocketsExecutor) ensureUpstreamConn(ctx context.Context, auth *cl
 	}
 
 	proxyURL := executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth)
-	if staleConn, staleCloser, staleAuthID, staleWSURL, staleLifecycle := detachMismatchedWebsocketSessionConn(sess, authID, wsURL, proxyURL); staleConn != nil {
+	if staleConn, staleCloser, staleAuthID, staleWSURL, staleLifecycle := detachMismatchedWebsocketSessionConn(ctx, sess, authID, wsURL, proxyURL); staleConn != nil {
 		staleLastEvent := sess.getLastEventType(staleConn)
 		logXAIWebsocketDisconnectedWithLastEvent(sess, sess.sessionID, staleAuthID, staleWSURL, "target_changed", staleLastEvent, nil)
 		if staleCloser != nil {
@@ -1357,7 +1357,7 @@ func readXAIWebsocketMessage(ctx context.Context, sess *codexWebsocketSession, c
 			if ev.err != nil {
 				return 0, nil, ev.err
 			}
-			return ev.msgType, ev.payload, nil
+			return ev.msgType, ev.Payload, nil
 		}
 	}
 }
@@ -1423,7 +1423,7 @@ func (e *XAIWebsocketsExecutor) readUpstreamLoop(sess *codexWebsocketSession, co
 			continue
 		}
 		select {
-		case ch <- codexWebsocketRead{conn: conn, msgType: msgType, payload: payload}:
+		case ch <- codexWebsocketRead{conn: conn, msgType: msgType, TimedEvent: cliproxyexecutor.TimedEvent{Payload: payload, ReceivedAt: time.Now().UTC()}}:
 		case <-done:
 		}
 	}

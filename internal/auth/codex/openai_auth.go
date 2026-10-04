@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
 	log "github.com/sirupsen/logrus"
@@ -182,6 +184,10 @@ func (o *CodexAuth) ExchangeCodeForTokensWithRedirect(ctx context.Context, code,
 		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
 
+	if accountID != "" {
+		tokenData.OAuthProvenance, _ = affinity.AcquiredOAuthProvenance("codex", accountID, tokenResp.AccessToken)
+	}
+
 	// Create auth bundle
 	bundle := &CodexAuthBundle{
 		TokenData:   tokenData,
@@ -279,14 +285,16 @@ func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken 
 		planType = claims.GetPlanType()
 	}
 
+	provenance, _ := affinity.AcquiredOAuthProvenance("codex", accountID, tokenResp.AccessToken)
 	return &CodexTokenData{
-		IDToken:      tokenResp.IDToken,
-		AccessToken:  tokenResp.AccessToken,
-		RefreshToken: tokenResp.RefreshToken,
-		AccountID:    accountID,
-		Email:        email,
-		PlanType:     planType,
-		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
+		OAuthProvenance: provenance,
+		IDToken:         tokenResp.IDToken,
+		AccessToken:     tokenResp.AccessToken,
+		RefreshToken:    tokenResp.RefreshToken,
+		AccountID:       accountID,
+		Email:           email,
+		PlanType:        planType,
+		Expire:          time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}, nil
 }
 
@@ -298,14 +306,15 @@ func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStora
 		planType = strings.TrimSpace(bundle.TokenData.PlanType)
 	}
 	storage := &CodexTokenStorage{
-		IDToken:      bundle.TokenData.IDToken,
-		AccessToken:  bundle.TokenData.AccessToken,
-		RefreshToken: bundle.TokenData.RefreshToken,
-		AccountID:    bundle.TokenData.AccountID,
-		LastRefresh:  bundle.LastRefresh,
-		Email:        bundle.TokenData.Email,
-		Expire:       bundle.TokenData.Expire,
-		PlanType:     planType,
+		OAuthProvenance: bundle.TokenData.OAuthProvenance,
+		IDToken:         bundle.TokenData.IDToken,
+		AccessToken:     bundle.TokenData.AccessToken,
+		RefreshToken:    bundle.TokenData.RefreshToken,
+		AccountID:       bundle.TokenData.AccountID,
+		LastRefresh:     bundle.LastRefresh,
+		Email:           bundle.TokenData.Email,
+		Expire:          bundle.TokenData.Expire,
+		PlanType:        planType,
 	}
 
 	return storage

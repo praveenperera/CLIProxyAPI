@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
 	log "github.com/sirupsen/logrus"
 )
@@ -17,6 +19,8 @@ import (
 // It maintains compatibility with the existing auth system while adding Claude-specific fields
 // for managing access tokens, refresh tokens, and user account information.
 type ClaudeTokenStorage struct {
+	// OAuthProvenance binds the acquired token to its verified account identity
+	OAuthProvenance affinity.OAuthProvenance `json:"oauth_provenance,omitempty"`
 	// IDToken is the JWT ID token containing user claims and identity information.
 	IDToken string `json:"id_token"`
 

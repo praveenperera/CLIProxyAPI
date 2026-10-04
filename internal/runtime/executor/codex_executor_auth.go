@@ -361,6 +361,7 @@ func (e *CodexExecutor) refreshLocked(ctx context.Context, auth *cliproxyauth.Au
 				outerErr = errOuter
 			} else if td != nil {
 				outerRefreshed = true
+				auth.Metadata["oauth_provenance"] = td.OAuthProvenance
 				auth.Metadata["id_token"] = td.IDToken
 				auth.Metadata["access_token"] = td.AccessToken
 				if td.RefreshToken != "" {

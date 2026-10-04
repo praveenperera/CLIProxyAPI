@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/gorilla/websocket"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
@@ -33,6 +35,15 @@ const (
 )
 
 func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *websocketConnectionCloser, *http.Response, error) {
+	requestFence, errRequestFence := http.NewRequestWithContext(ctx, http.MethodGet, wsURL, nil)
+	if errRequestFence != nil {
+		return nil, nil, nil, errRequestFence
+	}
+	requestFence.Header = headers
+	if errFence := cliproxyexecutor.CheckCredentialRequest(ctx, requestFence); errFence != nil {
+		return nil, nil, nil, errFence
+	}
+	headers = affinity.StripHeaders(headers)
 	dialer := newProxyAwareWebsocketDialer(ctx, e.cfg, auth)
 	dialer.HandshakeTimeout = codexResponsesWebsocketHandshakeTO
 	dialer.EnableCompression = true
@@ -86,7 +97,22 @@ func writeWebsocketPayloadMessage(provider string, sess *codexWebsocketSession, 
 	return errSend
 }
 
-func writeCodexWebsocketMessage(sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+func writeCodexWebsocketMessageContext(ctx context.Context, sess *codexWebsocketSession, conn *websocket.Conn, payload []byte) error {
+	if err := cliproxyexecutor.CheckCredentialFence(ctx); err != nil {
+		return err
+	}
+	if sess != nil {
+		sess.connMu.Lock()
+		binding := sess.transport
+		current := sess.conn
+		sess.connMu.Unlock()
+		if current != conn {
+			return affinity.NewError(affinity.CredentialChanged, time.Time{})
+		}
+		if err := binding.Check(ctx); err != nil {
+			return err
+		}
+	}
 	return writeWebsocketPayloadMessage("codex", sess, conn, payload)
 }
 
@@ -199,6 +225,9 @@ func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession,
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
 		msgType, payload, errRead := conn.ReadMessage()
+		if errRead == nil && msgType == websocket.TextMessage {
+			cliproxyexecutor.ObserveQuotaEvent(ctx, payload)
+		}
 		return msgType, payload, errRead
 	}
 	if conn == nil {
@@ -221,7 +250,10 @@ func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession,
 			if ev.err != nil {
 				return 0, nil, ev.err
 			}
-			return ev.msgType, ev.payload, nil
+			if ev.msgType == websocket.TextMessage {
+				cliproxyexecutor.ObserveQuotaTimedEvent(ctx, ev.TimedEvent)
+			}
+			return ev.msgType, ev.Payload, nil
 		}
 	}
 }

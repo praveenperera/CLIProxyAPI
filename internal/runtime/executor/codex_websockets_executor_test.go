@@ -507,17 +507,17 @@ func TestExistingWebsocketSessionConnRequiresMatchingHealthyConnection(t *testin
 		wsURL:      "ws://example.test/responses",
 	}
 	sess.resetUpstreamDisconnectError(conn)
-	if gotConn, gotCloser := existingWebsocketSessionConn(sess, "auth-a", "ws://example.test/responses", ""); gotConn != conn || gotCloser != closer {
+	if gotConn, gotCloser := existingWebsocketSessionConn(context.Background(), sess, "auth-a", "ws://example.test/responses", ""); gotConn != conn || gotCloser != closer {
 		t.Fatal("matching healthy websocket session was not reusable")
 	}
-	if got, _ := existingWebsocketSessionConn(sess, "auth-b", "ws://example.test/responses", ""); got != nil {
+	if got, _ := existingWebsocketSessionConn(context.Background(), sess, "auth-b", "ws://example.test/responses", ""); got != nil {
 		t.Fatal("websocket session matched a different auth")
 	}
-	if got, _ := existingWebsocketSessionConn(sess, "auth-a", "ws://other.test/responses", ""); got != nil {
+	if got, _ := existingWebsocketSessionConn(context.Background(), sess, "auth-a", "ws://other.test/responses", ""); got != nil {
 		t.Fatal("websocket session matched a different URL")
 	}
 	sess.setUpstreamDisconnectError(conn, errors.New("upstream disconnected"))
-	if got, _ := existingWebsocketSessionConn(sess, "auth-a", "ws://example.test/responses", ""); got != nil {
+	if got, _ := existingWebsocketSessionConn(context.Background(), sess, "auth-a", "ws://example.test/responses", ""); got != nil {
 		t.Fatal("disconnected websocket session remained reusable")
 	}
 }
@@ -815,7 +815,7 @@ func TestSendTerminalWebsocketReadInvalidatesBeforeWaitingForCapacity(t *testing
 
 	t.Run("full channel invalidates before waiting", func(t *testing.T) {
 		ch := make(chan codexWebsocketRead, 1)
-		ch <- codexWebsocketRead{payload: []byte("queued")}
+		ch <- codexWebsocketRead{TimedEvent: cliproxyexecutor.TimedEvent{Payload: []byte("queued")}}
 		done := make(chan struct{})
 		invalidateCalled := make(chan struct{})
 		result := make(chan bool, 1)
@@ -858,7 +858,7 @@ func TestSendTerminalWebsocketReadInvalidatesBeforeWaitingForCapacity(t *testing
 
 	t.Run("full channel stops when invalidation cancels active read", func(t *testing.T) {
 		ch := make(chan codexWebsocketRead, 1)
-		ch <- codexWebsocketRead{payload: []byte("queued")}
+		ch <- codexWebsocketRead{TimedEvent: cliproxyexecutor.TimedEvent{Payload: []byte("queued")}}
 		done := make(chan struct{})
 		invalidated := sendTerminalWebsocketRead(ch, done, codexWebsocketRead{err: terminalErr}, func() {
 			close(done)

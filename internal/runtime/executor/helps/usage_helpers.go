@@ -26,38 +26,41 @@ import (
 )
 
 type UsageReporter struct {
-	requestID            string
-	traceID              string
-	selectionID          string
-	provider             string
-	baseURL              string
-	executorType         string
-	model                string
-	alias                string
-	authID               string
-	authIndex            string
-	authMu               sync.RWMutex
-	accessTokenHash      string
-	authType             string
-	apiKey               string
-	accessProvider       string
-	isNativeKey          bool
-	sessionID            string
-	parentSessionID      string
-	source               string
-	reasoning            string
-	serviceTier          string
-	effectiveServiceTier string
-	generate             bool
-	stream               bool
-	requestedAt          time.Time
-	ttftMu               sync.RWMutex
-	ttft                 time.Duration
-	firstPacketDuration  time.Duration
-	firstPacketSet       bool
-	ttftStart            time.Time
-	ttftSet              bool
-	once                 sync.Once
+	transformationsMu     sync.Mutex
+	transformations       usage.InputTransformationCounts
+	transformationEntries map[[32]byte]struct{}
+	requestID             string
+	traceID               string
+	selectionID           string
+	provider              string
+	baseURL               string
+	executorType          string
+	model                 string
+	alias                 string
+	authID                string
+	authIndex             string
+	authMu                sync.RWMutex
+	accessTokenHash       string
+	authType              string
+	apiKey                string
+	accessProvider        string
+	isNativeKey           bool
+	sessionID             string
+	parentSessionID       string
+	source                string
+	reasoning             string
+	serviceTier           string
+	effectiveServiceTier  string
+	generate              bool
+	stream                bool
+	requestedAt           time.Time
+	ttftMu                sync.RWMutex
+	ttft                  time.Duration
+	firstPacketDuration   time.Duration
+	firstPacketSet        bool
+	ttftStart             time.Time
+	ttftSet               bool
+	once                  sync.Once
 
 	responseModelMu sync.RWMutex
 	// responseModel holds the latest model name reported by the upstream response.
@@ -705,6 +708,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		Failed:               failed,
 		Fail:                 fail,
 		Detail:               detail,
+		InputTransformations: r.InputTransformationCounts(),
 	}
 }
 

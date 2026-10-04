@@ -20,11 +20,13 @@ import (
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/api/handlers"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	log "github.com/sirupsen/logrus"
 )
 
 var corsExposedResponseHeaders = []string{
 	logging.CPATraceIDHeader,
+	affinity.ChatHandleHeader,
 	"X-CPA-VERSION",
 	"X-CPA-COMMIT",
 	"X-CPA-BUILD-DATE",
@@ -514,6 +516,9 @@ func accessAuthMiddleware(manager *sdkaccess.Manager, realtimeError bool) gin.Ha
 		if err == nil {
 			if result != nil {
 				c.Set("userApiKey", result.Principal)
+				if caller, errCaller := affinity.AuthenticatedCaller(result.Provider, result.Principal); errCaller == nil {
+					c.Request = c.Request.WithContext(affinity.WithAuthenticatedCaller(c.Request.Context(), caller))
+				}
 				c.Set("accessProvider", result.Provider)
 				if len(result.Metadata) > 0 {
 					c.Set("accessMetadata", result.Metadata)

@@ -410,3 +410,6 @@ func (e *ClaudeExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Aut
 
 // SupportsApplyPatch reports the actual executor contract, independent of its provider name.
 func (e *ClaudeExecutor) SupportsApplyPatch() bool { return e != nil }
+
+// LocalBuiltinProvider identifies the local built-in execution authority
+func (e *ClaudeExecutor) LocalBuiltinProvider() string { return "claude" }

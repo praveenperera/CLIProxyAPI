@@ -9,6 +9,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/browser"
+
 	// legacy client removed
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
@@ -202,7 +203,8 @@ waitForCallback:
 
 	fileName := claude.CredentialFileName(tokenStorage.Email, tokenStorage.OrganizationUUID, tokenStorage.AccountUUID)
 	metadata := map[string]any{
-		"email": tokenStorage.Email,
+		"email":            tokenStorage.Email,
+		"oauth_provenance": tokenStorage.OAuthProvenance,
 	}
 	if tokenStorage.AccountUUID != "" {
 		metadata["account_uuid"] = tokenStorage.AccountUUID

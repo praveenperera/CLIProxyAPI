@@ -78,6 +78,8 @@ type Record struct {
 	Detail      Detail
 	// ResponseHeaders stores a snapshot of upstream response headers for usage sinks.
 	ResponseHeaders http.Header
+	// InputTransformations contains only bounded provider-reported drop counts
+	InputTransformations InputTransformationCounts
 }
 
 // FailureStreamTruncatedCode marks a locally synthesized failure for an

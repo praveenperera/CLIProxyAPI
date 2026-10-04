@@ -234,6 +234,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				isHandshake = true
 			} else if bytes.HasPrefix(line, dataTag) {
 				data := bytes.TrimSpace(line[5:])
+				cliproxyexecutor.ObserveQuotaEvent(ctx, data)
 				data = helps.RestoreCodexMultiAgentV2Response(data, optimizeMultiAgentV2)
 				observeCodexTokenEvent(reporter, data)
 				translatedLine = append([]byte("data: "), data...)
@@ -429,6 +430,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 				translatedLine = transformed
 			} else if bytes.HasPrefix(line, dataTag) {
 				data := bytes.TrimSpace(line[5:])
+				cliproxyexecutor.ObserveQuotaEvent(ctx, data)
 				data = helps.RestoreCodexMultiAgentV2Response(data, optimizeMultiAgentV2)
 				observeCodexTokenEvent(reporter, data)
 				translatedLine = append([]byte("data: "), data...)

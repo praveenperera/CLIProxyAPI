@@ -18,3 +18,6 @@ func (e *CodexExecutor) modelLevelCooling() bool {
 
 // SupportsApplyPatch reports the actual executor contract, independent of its provider name.
 func (e *CodexExecutor) SupportsApplyPatch() bool { return e != nil }
+
+// LocalBuiltinProvider identifies the local built-in execution authority
+func (e *CodexExecutor) LocalBuiltinProvider() string { return "codex" }

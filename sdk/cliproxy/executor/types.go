@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
@@ -204,6 +206,13 @@ type WebSocketResponseObserver func(context.Context, WebSocketResponseEvent)
 
 // Options controls execution behavior for both streaming and non-streaming calls.
 type Options struct {
+	// Affinity is a trusted host-validated local lifecycle request
+	Affinity affinity.Request
+	// AffinityBound reports the saved local handle before upstream dispatch
+	AffinityBound func(affinity.Handle)
+	// NativeHistory controls preservation at the neutral executor boundary
+	NativeHistory NativeHistoryPolicy
+
 	// Stream toggles streaming mode.
 	Stream bool
 	// Alt carries optional alternate format hint (e.g. SSE JSON key).
@@ -314,3 +323,13 @@ type TransientRateLimitError interface {
 	error
 	IsTransientRateLimit() bool
 }
+
+// NativeHistoryPolicy specifies whether native opaque history must remain unchanged
+type NativeHistoryPolicy uint8
+
+const (
+	// NativeHistoryDefault keeps the legacy executor policy
+	NativeHistoryDefault NativeHistoryPolicy = iota
+	// NativeHistoryPreserve requires strict native history preservation
+	NativeHistoryPreserve
+)

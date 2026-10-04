@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/httpwire"
@@ -260,6 +262,9 @@ func (w *ResponseWriterWrapper) captureCurrentHeaders() {
 
 	// Capture all current headers from the underlying ResponseWriter
 	for key, values := range w.ResponseWriter.Header() {
+		if affinity.IsLocalHeader(key) {
+			continue
+		}
 		// Make a copy of the values slice to avoid reference issues
 		headerValues := make([]string, len(values))
 		copy(headerValues, values)

@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -346,9 +348,17 @@ func (h *OpenAIResponsesAPIHandler) authenticateResponsesWebsocketTurn(c *gin.Co
 // response events back as JSON websocket text messages. `response.interrupt`
 // is forwarded to the current Codex upstream socket without starting a new turn.
 func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
+	if errChat := h.PrepareChatWebsocket(c); errChat != nil {
+		h.WriteErrorResponse(c, errChat)
+		return
+	}
+	upgradeHeaders := websocketUpgradeHeaders(c.Request)
+	if handle := c.Writer.Header().Get(affinity.ChatHandleHeader); handle != "" {
+		upgradeHeaders.Set(affinity.ChatHandleHeader, handle)
+	}
 	upgrader := responsesWebsocketUpgrader
 	upgrader.EnableCompression = responsesWebsocketCompressionEnabled.Load()
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, websocketUpgradeHeaders(c.Request))
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, upgradeHeaders)
 	if err != nil {
 		return
 	}

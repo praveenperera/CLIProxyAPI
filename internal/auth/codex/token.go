@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/misc"
 	log "github.com/sirupsen/logrus"
 )
@@ -228,6 +230,8 @@ func MergeCodexCredentialsFromDisk(diskMap, incomingMetadata map[string]any) map
 // It maintains compatibility with the existing auth system while adding Codex-specific fields
 // for managing access tokens, refresh tokens, and user account information.
 type CodexTokenStorage struct {
+	// OAuthProvenance binds the acquired token to its verified account identity
+	OAuthProvenance affinity.OAuthProvenance `json:"oauth_provenance,omitempty"`
 	// IDToken is the JWT ID token containing user claims and identity information.
 	IDToken string `json:"id_token"`
 	// AccessToken is the OAuth2 access token used for authenticating API requests.

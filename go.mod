@@ -45,6 +45,7 @@ require (
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.5.1 // indirect
+	github.com/gofrs/flock v0.12.1
 	github.com/pion/datachannel v1.6.2 // indirect
 	github.com/pion/dtls/v3 v3.1.5 // indirect
 	github.com/pion/logging v0.2.4 // indirect

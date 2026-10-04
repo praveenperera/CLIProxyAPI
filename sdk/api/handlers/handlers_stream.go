@@ -9,6 +9,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
@@ -95,8 +96,8 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 	passthroughHeadersEnabled := executionPassthroughHeaders(h.CurrentConfig(), execOptions.InternalSource)
 	interceptorHost := h.interceptorHost()
 	streamInterceptorsActive := streamInterceptorsEnabled(interceptorHost)
-	rawStreamHeaders := cloneHeader(streamResult.Headers)
-	baseStreamHeaders := cloneHeader(streamResult.Headers)
+	rawStreamHeaders := affinity.StripHeaders(streamResult.Headers)
+	baseStreamHeaders := affinity.StripHeaders(streamResult.Headers)
 	// Request headers and request bodies are stream-invariant. Keep a private snapshot
 	// and clone into each interceptor call so plugins cannot mutate shared storage.
 	// Schema v3+ payload chunks omit these bodies (host also strips per plugin).
@@ -151,6 +152,12 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		var completionErr error
 		var streamUsage helps.StreamUsageBuffer
 		defer func() {
+			// a cancelled context can race a closed source in the final read
+			if completionOutcome == pluginapi.RequestCompletionSucceeded && ctx != nil && ctx.Err() != nil {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				completionErr = ctx.Err()
+			}
 			completionOutcome, completionStatus, completionErr = streamDeliveryCompletion(ctx, completionOutcome, completionStatus, completionErr)
 			lifecycle.complete(completionOutcome, completionStatus, completionErr)
 			if reporter != nil && !nestedTracker.hasNestedExecution() {
@@ -274,7 +281,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 			}
 		}
 	}()
-	return dataChan, upstreamHeaders, errChan
+	return dataChan, localChatHeaders(upstreamHeaders, ctx), errChan
 }
 
 func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string, allowImageModel bool) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
@@ -282,6 +289,15 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 }
 
 func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context, entryProtocol, exitProtocol, modelName string, rawJSON []byte, alt string, allowImageModel bool, execOptions modelExecutionOptions) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
+	var chatErr *interfaces.ErrorMessage
+	ctx, chatErr = h.prepareChatAffinity(ctx)
+	if chatErr != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- chatErr
+		close(errChan)
+		return nil, nil, errChan
+	}
+
 	originalRequestedModel := modelName
 	// Speech-only models are reachable solely through the speech entry protocol.
 	execOptions.AllowSpeechModel = isModelExecutionSpeechProtocol(entryProtocol)
@@ -293,6 +309,12 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	if errMsg := validateNativeInteractionsExecution(entryProtocol, execOptions, routeDecision); errMsg != nil {
 		errChan := make(chan *interfaces.ErrorMessage, 1)
 		errChan <- errMsg
+		close(errChan)
+		return nil, nil, errChan
+	}
+	if chatErr := strictRouteError(ctx, routeDecision.ExecutorPluginID); chatErr != nil {
+		errChan := make(chan *interfaces.ErrorMessage, 1)
+		errChan <- chatErr
 		close(errChan)
 		return nil, nil, errChan
 	}
@@ -357,6 +379,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		return nil, nil, errChan
 	}
 	ctx = enrichContextWithSessionHierarchy(ctx, opts.Headers, req.Payload, opts.Metadata)
+	opts = chatOptions(ctx, opts)
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
@@ -386,8 +409,8 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	streamInterceptorsActive := streamInterceptorsEnabled(interceptorHost)
 	// Resolve bootstrap retries and header initialization before returning so the
 	// returned header snapshot is never modified by the stream goroutine.
-	rawStreamHeaders := cloneHeader(streamResult.Headers)
-	baseStreamHeaders := cloneHeader(streamResult.Headers)
+	rawStreamHeaders := affinity.StripHeaders(streamResult.Headers)
+	baseStreamHeaders := affinity.StripHeaders(streamResult.Headers)
 	chunks := streamResult.Chunks
 	if chunks == nil {
 		closed := make(chan coreexecutor.StreamChunk)
@@ -525,6 +548,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	}
 
 	bootstrapEligible := func(err error) bool {
+		if strictChat(ctx) {
+			return false
+		}
 		status := statusFromError(err)
 		if status == 0 {
 			return true
@@ -597,6 +623,12 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		completionStatus := http.StatusOK
 		var completionErr error
 		defer func() {
+			// a cancelled context can race a closed source in the final read
+			if completionOutcome == pluginapi.RequestCompletionSucceeded && ctx != nil && ctx.Err() != nil {
+				completionOutcome = pluginapi.RequestCompletionCanceled
+				completionStatus = 0
+				completionErr = ctx.Err()
+			}
 			completionOutcome, completionStatus, completionErr = streamDeliveryCompletion(ctx, completionOutcome, completionStatus, completionErr)
 			lifecycle.complete(completionOutcome, completionStatus, completionErr)
 		}()
@@ -720,7 +752,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 			}
 		}
 	}()
-	return dataChan, upstreamHeaders, errChan
+	return dataChan, localChatHeaders(upstreamHeaders, ctx), errChan
 }
 
 type sseJSONValidationState struct {

@@ -104,6 +104,8 @@ type reviewedInPlaceByteWrite struct {
 }
 
 var reviewedInPlaceByteWrites = map[string]reviewedInPlaceByteWrite{
+	"sdk/cliproxy/affinity/types.go":                        {2, "copies hash and decoded handle bytes into new private fixed-size arrays; neither destination is a JSON payload or a GJSON input"},
+	"sdk/cliproxy/affinity/file_store.go":                   {2, "copies the private deployment key and HMAC result into store-owned or new fixed-size arrays; neither destination is parsed by GJSON"},
 	"internal/translator/common/apply_patch_responses.go":   {1, "shifts [][]byte item references in a private output slice; no byte of any JSON payload is rewritten"},
 	"internal/translator/common/vertex_partial_args.go":     {1, "shifts []string object keys to insert a key; no byte of any payload is rewritten"},
 	"internal/runtime/executor/claude_signing.go":           {2, "writes CCH digits into bytes.Clone(body); the caller's body is never touched"},

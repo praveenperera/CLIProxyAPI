@@ -44,6 +44,7 @@ func NewProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 		transport := buildProxyTransport(proxyURL)
 		if transport != nil {
 			httpClient.Transport = transport
+			httpClient.Transport = cliproxyexecutor.CredentialTransport(ctx, httpClient.Transport)
 			return httpClient
 		}
 		// If proxy setup failed, log and fall through to context RoundTripper
@@ -55,6 +56,7 @@ func NewProxyAwareHTTPClient(ctx context.Context, cfg *config.Config, auth *clip
 		httpClient.Transport = rt
 	}
 
+	httpClient.Transport = cliproxyexecutor.CredentialTransport(ctx, httpClient.Transport)
 	return httpClient
 }
 

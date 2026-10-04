@@ -456,6 +456,9 @@ type QuotaExceeded struct {
 
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
+	// QuotaAwareChatAffinity enables explicit local chat lifecycle routing
+	QuotaAwareChatAffinity *QuotaAffinityConfig `yaml:"quota-aware-chat-affinity,omitempty" json:"quota-aware-chat-affinity,omitempty"`
+
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
