@@ -277,6 +277,21 @@ func applyThinking(body, sourceBody []byte, model string, fromFormat string, toF
 	}
 	nativeResponses := responseTarget && isResponsesFormat(fromFormat) && supportsUpdates
 
+	if !suffixResult.HasSuffix {
+		modeBody := body
+		if len(sourceBody) > 0 && fromFormat == "claude" {
+			modeBody = sourceBody
+		}
+		if explicit := extractClaudeConfig(modeBody); explicit.Mode == ModeBetweenTools {
+			if _, err := ValidateConfig(explicit, modelInfo, fromFormat, providerFormat, false); err != nil {
+				return body, err
+			}
+			if err := ValidateBetweenToolsBody(modeBody); err != nil {
+				return body, err
+			}
+		}
+	}
+
 	// 2. Route check: Get provider applier after target cleanup.
 	applier, isPluginApplier := resolveProviderApplier(providerFormat, providerKey)
 	if applier == nil {
@@ -443,7 +458,7 @@ func applyThinking(body, sourceBody []byte, model string, fromFormat string, toF
 	// A fully disabled amount takes precedence over visibility. Re-applying a
 	// summary-only field can recreate an otherwise removed provider config and
 	// make a default-on model think again.
-	if thinkingIsFullyDisabled(*validated) || nativeResponses {
+	if validated.Mode == ModeBetweenTools || thinkingIsFullyDisabled(*validated) || nativeResponses {
 		return applied, nil
 	}
 	if providerFormat == "claude" && thinkingRequestedOff(config) {
@@ -766,7 +781,7 @@ func reasoningEffortFromConfig(config ThinkingConfig) string {
 // extractClaudeConfig extracts thinking configuration from Claude format request body.
 //
 // Claude API format:
-//   - thinking.type: "enabled", "adaptive", "auto", or "disabled"
+//   - thinking.type: "enabled", "adaptive", "auto", "disabled", or "between_tools"
 //   - thinking.budget_tokens: integer (-1=auto, 0=disabled, >0=budget)
 //   - output_config.effort: string ("none", "auto", "low", "medium", "high", "max")
 //
@@ -776,6 +791,9 @@ func reasoningEffortFromConfig(config ThinkingConfig) string {
 // otherwise returns ModeAuto to indicate the user wants thinking enabled with default budget.
 func extractClaudeConfig(body []byte) ThinkingConfig {
 	thinkingType := gjson.GetBytes(body, "thinking.type").String()
+	if thinkingType == "between_tools" {
+		return ThinkingConfig{Mode: ModeBetweenTools, Level: ThinkingLevel(gjson.GetBytes(body, "output_config.effort").String())}
+	}
 	if thinkingType == "disabled" {
 		return ThinkingConfig{Mode: ModeNone, Budget: 0}
 	}

@@ -70,6 +70,23 @@ func init() {
 //	  }
 //	}
 func (a *Applier) Apply(body []byte, config thinking.ThinkingConfig, modelInfo *registry.ModelInfo) ([]byte, error) {
+	if config.Mode == thinking.ModeBetweenTools {
+		if _, err := thinking.ValidateConfig(config, modelInfo, "claude", "claude", false); err != nil {
+			return body, err
+		}
+		if err := thinking.ValidateBetweenToolsBody(body); err != nil {
+			return body, err
+		}
+		result, err := sjson.SetBytes(body, "thinking.type", "between_tools")
+		if err != nil {
+			return body, err
+		}
+		if config.Level != "" {
+			return sjson.SetBytes(result, "output_config.effort", string(config.Level))
+		}
+		return result, nil
+	}
+
 	if thinking.IsUserDefinedModel(modelInfo) {
 		return applyCompatibleClaude(body, config)
 	}

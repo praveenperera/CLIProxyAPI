@@ -18,6 +18,8 @@ const (
 	ModeNone
 	// ModeAuto indicates automatic/dynamic thinking (corresponds to suffix "(auto)" or budget=-1)
 	ModeAuto
+	// ModeBetweenTools disables up-front thinking but retains between-tool updates
+	ModeBetweenTools
 )
 
 // String returns the string representation of ThinkingMode.
@@ -29,6 +31,8 @@ func (m ThinkingMode) String() string {
 		return "level"
 	case ModeNone:
 		return "none"
+	case ModeBetweenTools:
+		return "between_tools"
 	case ModeAuto:
 		return "auto"
 	default:
@@ -67,6 +71,7 @@ const (
 //   - ModeAuto: Budget=-1, Level is ignored
 //   - ModeBudget: Budget is a positive integer, Level is ignored
 //   - ModeLevel: Budget is ignored, Level is a valid level
+//   - ModeBetweenTools: Budget is zero, Level is an optional supported effort
 type ThinkingConfig struct {
 	// Mode specifies the configuration mode
 	Mode ThinkingMode

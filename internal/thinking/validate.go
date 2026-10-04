@@ -46,6 +46,16 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 		support = modelInfo.Thinking
 	}
 
+	if config.Mode == ModeBetweenTools {
+		if fromFormat != "claude" || toFormat != "claude" || support == nil || !support.BetweenToolsAllowed || modelInfo.Type != "claude" {
+			return nil, NewThinkingErrorWithModel(ErrThinkingNotSupported, "between-tools thinking is not supported for this route", model)
+		}
+		if config.Budget != 0 || (config.Level != "" && config.Level != LevelLow && config.Level != LevelMedium && config.Level != LevelHigh) {
+			return nil, NewThinkingErrorWithModel(ErrLevelNotSupported, "between-tools thinking requires low, medium, or high effort", model)
+		}
+		return &config, nil
+	}
+
 	if support == nil {
 		if config.Mode != ModeNone {
 			return nil, NewThinkingErrorWithModel(ErrThinkingNotSupported, "thinking not supported for this model", model)
