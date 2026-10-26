@@ -402,7 +402,21 @@ func applyAuthFileFieldsPatch(targetAuth *coreauth.Auth, req map[string]json.Raw
 			targetAuth.Metadata = make(map[string]any)
 		}
 
-		if fieldPath == coreauth.AttributeWeight {
+		if fieldPath == "quota_weight" {
+			// null restores the default of 1 by removing the field, like weight
+			if value == nil {
+				delete(targetAuth.Metadata, "quota_weight")
+			} else {
+				number, okNumber := value.(json.Number)
+				quotaWeight, errQuotaWeight := number.Float64()
+				if !okNumber || errQuotaWeight != nil || quotaWeight <= 0 || quotaWeight > 1000 {
+					return &authFileFieldPatchError{message: "quota_weight must be a number above 0 and at most 1000"}
+				}
+				targetAuth.Metadata["quota_weight"] = quotaWeight
+			}
+		} else if rootAuthFileField(fieldPath) == "quota_weight" {
+			return &authFileFieldPatchError{message: "quota_weight does not support nested fields"}
+		} else if fieldPath == coreauth.AttributeWeight {
 			if value == nil {
 				delete(targetAuth.Metadata, coreauth.AttributeWeight)
 			} else {
