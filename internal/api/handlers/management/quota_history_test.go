@@ -45,7 +45,7 @@ func TestGetQuotaHistoryShapeAndDisabled(t *testing.T) {
 			t.Error(errClose)
 		}
 	})
-	auth := &coreauth.Auth{ID: "history-auth", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "fake-key", "base_url": "https://fake.invalid"}}
+	auth := &coreauth.Auth{ID: "history-auth", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "fake-key", "base_url": "https://fake.invalid"}, Metadata: map[string]any{"email": " user@example.com ", "plan_type": "prolite"}}
 	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
 		t.Fatal(errRegister)
 	}
@@ -76,7 +76,7 @@ func TestGetQuotaHistoryShapeAndDisabled(t *testing.T) {
 		t.Fatal(errDecode)
 	}
 	want := quotaHistoryResponse{Enabled: true, RetentionSeconds: 2592000, Credentials: []quotaHistoryCredentialEntry{{
-		AuthID: "history-auth", AuthIndex: auth.EnsureIndex(), Provider: "codex", QuotaWeight: 1,
+		AuthID: "history-auth", AuthIndex: auth.EnsureIndex(), Provider: "codex", QuotaWeight: 1, Email: "user@example.com", PlanType: "prolite",
 		Windows: []quotaHistoryWindowEntry{{ID: "seven_day", PeriodSeconds: 604800, Points: []quotaHistoryPointEntry{{T: observed.Unix(), Remaining: 83.5, ResetAt: reset.Unix()}}}},
 	}}}
 	got, _ := json.Marshal(payload)

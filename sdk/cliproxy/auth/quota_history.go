@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,10 @@ type QuotaHistoryCredential struct {
 	// QuotaWeight is the credential's quota size relative to its provider's other credentials,
 	// from the optional quota_weight field in its auth file; it defaults to 1
 	QuotaWeight float64
+	// Email is the account email from the auth file, or empty when it has none
+	Email string
+	// PlanType is the plan_type recorded in the auth file, such as Codex's prolite, or empty
+	PlanType string
 	// Windows is sorted by window ID
 	Windows []QuotaHistoryWindow
 }
@@ -515,11 +520,19 @@ func (m *Manager) QuotaHistory(since, until time.Time) QuotaHistory {
 		}
 		credential.AuthIndex = a.EnsureIndex()
 		credential.QuotaWeight = quotaWeight(a.Metadata)
+		// read the metadata directly: AccountInfo returns the key itself for API-key credentials
+		credential.Email = metadataString(a.Metadata, "email")
+		credential.PlanType = metadataString(a.Metadata, "plan_type")
 		sort.Slice(credential.Windows, func(i, j int) bool { return credential.Windows[i].ID < credential.Windows[j].ID })
 		result.Credentials = append(result.Credentials, credential)
 	}
 	sort.Slice(result.Credentials, func(i, j int) bool { return result.Credentials[i].AuthID < result.Credentials[j].AuthID })
 	return result
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
 }
 
 // quotaWeight reads a positive quota_weight from auth metadata; plans of one provider can differ in

@@ -86,7 +86,7 @@ Quota is observed from provider response headers and Codex events. The server al
 
 Routing uses only the in-memory observations, which start empty after a restart. For charts, the server also records fractional remaining values per credential and window in `quota-history.jsonl` in the state directory. Points are added on the first observation, a change of at least 0.1 percentage points, a new reset time, or after 15 minutes without a stored point. Points older than 30 days are dropped when the server starts and when the log is rewritten, at most every 6 hours during polling. Each series keeps at most 8192 points. History writes are best effort: a write error is logged and does not affect dispatch or saved chats.
 
-Read the history from `GET /v8/management/quota/history`. The optional `since` and `until` query parameters are unix seconds; the defaults are the last 14 days and now. The response lists current credentials with their `auth_index` and `quota_weight`, and each window's points with `t`, `remaining` as a percent, and `reset_at` (0 when unknown):
+Read the history from `GET /v8/management/quota/history`. The optional `since` and `until` query parameters are unix seconds; the defaults are the last 14 days and now. The response lists current credentials with their `auth_index` and `quota_weight`, the account `email` and `plan_type` when the auth file has them, and each window's points with `t`, `remaining` as a percent, and `reset_at` (0 when unknown):
 
 ```json
 {
@@ -94,6 +94,7 @@ Read the history from `GET /v8/management/quota/history`. The optional `since` a
   "retention_seconds": 2592000,
   "credentials": [
     {"auth_id": "...", "auth_index": "...", "provider": "claude", "quota_weight": 2,
+     "email": "user@example.com",
      "windows": [
        {"id": "seven_day", "period_seconds": 604800,
         "points": [{"t": 1761400000, "remaining": 83.5, "reset_at": 1761900000}]}
