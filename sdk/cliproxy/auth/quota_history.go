@@ -525,7 +525,15 @@ func (m *Manager) QuotaHistory(since, until time.Time) QuotaHistory {
 // quotaWeight reads a positive quota_weight from auth metadata; plans of one provider can differ in
 // size, such as Claude Max 20x and 5x, so pooled views weight each credential's remaining share
 func quotaWeight(metadata map[string]any) float64 {
-	if value, ok := metadata["quota_weight"].(float64); ok && value > 0 && value <= 1000 {
+	var value float64
+	switch typed := metadata["quota_weight"].(type) {
+	case float64:
+		value = typed
+	case json.Number:
+		// management field patches store numbers undecoded until the file is reloaded
+		value, _ = typed.Float64()
+	}
+	if value > 0 && value <= 1000 {
 		return value
 	}
 	return 1

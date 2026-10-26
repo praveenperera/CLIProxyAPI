@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,6 +97,14 @@ func TestQuotaHistoryRecordsDownsamplesPersistsAndPrunes(t *testing.T) {
 	}
 	if weighted := m.QuotaHistory(base.Add(-time.Hour), now); weighted.Credentials[0].QuotaWeight != 2 {
 		t.Fatalf("weighted credential = %+v", weighted.Credentials[0])
+	}
+	// a management field patch stores the number undecoded
+	auth.Metadata["quota_weight"] = json.Number("1.7")
+	if _, errUpdate := m.Update(context.Background(), auth); errUpdate != nil {
+		t.Fatal(errUpdate)
+	}
+	if patched := m.QuotaHistory(base.Add(-time.Hour), now); patched.Credentials[0].QuotaWeight != 1.7 {
+		t.Fatalf("patched credential = %+v", patched.Credentials[0])
 	}
 	if len(credential.Windows) != 1 || credential.Windows[0].ID != "primary" || credential.Windows[0].Period != 5*time.Hour {
 		t.Fatalf("windows = %+v", credential.Windows)
