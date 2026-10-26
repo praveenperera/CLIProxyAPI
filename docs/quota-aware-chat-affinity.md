@@ -21,7 +21,7 @@ routing:
     poll-concurrency: 4
 ```
 
-Use an absolute state path outside `auth-dir`. Only one server can use this directory. Keep the directory and its key across restarts. A lost directory or key invalidates saved chat handles. The directory contains private routing state, not provider tokens. Missing directory components are created with private permissions. Each parent entry is synchronized before the store can admit a request. A creation, synchronization, write, close, or rename error prevents dispatch. An uncertain write disables the open store until restart.
+Use an absolute state path outside `auth-dir`. Only one server can use this directory. Keep the directory and its key across restarts. A lost directory or key invalidates saved chat handles. The directory contains private routing state and quota history, not provider tokens. Missing directory components are created with private permissions. Each parent entry is synchronized before the store can admit a request. A creation, synchronization, write, close, or rename error prevents dispatch. An uncertain write disables the open store until restart.
 
 The file store supports local state on macOS and Linux where file and directory synchronization succeeds. Other platforms reject this profile. Keep state on a local durable volume, not a network or shared filesystem. Successful synchronization calls do not prove hardware behavior under power loss; universal crash durability and network filesystem durability are not claimed.
 
@@ -73,7 +73,27 @@ Token-count requests require a saved continuation. They cannot create a chat. Fo
 
 Only new chats use quota ranking. The server keeps the highest available credential priority tier, excludes zero weights and fresh denials, and prefers the earliest positive future reset. Comparable remaining allowances break reset ties. Missing, stale, or unsupported quota data uses the configured fallback selector. Any applicable exhausted window blocks a saved turn.
 
-Quota is observed from provider response headers and Codex events. The server also makes an initial read-only OAuth usage GET, then repeats it at the configured interval through the authenticated provider transport. Body size and concurrent fetches are bounded. The worker limit is shared across overlapping poll passes, and each credential has at most one fetch in flight. An established response has no new deadline. Shutdown cancellation stops and joins fetches. A failed poll does not renew old data. No quota reset calls are made. Quota observations are not saved across server restarts.
+Quota is observed from provider response headers and Codex events. The server also makes an initial read-only OAuth usage GET, then repeats it at the configured interval through the authenticated provider transport. Body size and concurrent fetches are bounded. The worker limit is shared across overlapping poll passes, and each credential has at most one fetch in flight. An established response has no new deadline. Shutdown cancellation stops and joins fetches. A failed poll does not renew old data. No quota reset calls are made.
+
+Routing uses only the in-memory observations, which start empty after a restart. For charts, the server also records fractional remaining values per credential and window in `quota-history.jsonl` in the state directory. Points are added on the first observation, a change of at least 0.1 percentage points, a new reset time, or after 15 minutes without a stored point. Points older than 30 days are dropped when the server starts and when the log is rewritten, at most every 6 hours during polling. Each series keeps at most 8192 points. History writes are best effort: a write error is logged and does not affect dispatch or saved chats.
+
+Read the history from `GET /v8/management/quota/history`. The optional `since` and `until` query parameters are unix seconds; the defaults are the last 14 days and now. The response lists current credentials with their `auth_index`, and each window's points with `t`, `remaining` as a percent, and `reset_at` (0 when unknown):
+
+```json
+{
+  "enabled": true,
+  "retention_seconds": 2592000,
+  "credentials": [
+    {"auth_id": "...", "auth_index": "...", "provider": "claude",
+     "windows": [
+       {"id": "seven_day", "period_seconds": 604800,
+        "points": [{"t": 1761400000, "remaining": 83.5, "reset_at": 1761900000}]}
+     ]}
+  ]
+}
+```
+
+Without this profile, the endpoint returns `"enabled": false` and no credentials.
 
 Normal OAuth acquisition must prove the account for the exact token. Old files without this proof, synthetic identities, and setup tokens are not admitted. A normal refresh for the same verified account can continue. A persistent Codex socket also retains its actual handshake credential and caller/chat scope. A different scope or credential requires a new handshake; a required-socket request cannot use a socket with another owner. A different account cannot. API keys use a private HMAC of the exact key and origin; a key or origin replacement invalidates the binding.
 

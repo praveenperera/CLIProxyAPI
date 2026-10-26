@@ -27,6 +27,7 @@ type affinityRuntime struct {
 	now          func() time.Time
 	pollSlots    chan struct{}
 	polling      map[string]bool
+	history      *quotaHistory
 }
 
 type quotaRecord struct {
@@ -64,6 +65,8 @@ func (m *Manager) ConfigureQuotaAffinity(cfg *internalconfig.Config) error {
 		return err
 	}
 	runtime.store = store
+	// history persistence is best effort and never fails profile startup
+	runtime.history = openQuotaHistory(settings.StateDir, func() time.Time { return runtime.now() })
 	m.affinityRuntime = runtime
 	return nil
 }
@@ -95,6 +98,8 @@ func (m *Manager) CloseQuotaAffinity() error {
 	if m.affinityRuntime == nil {
 		return nil
 	}
+	// drain history writes before the store releases the directory lock
+	m.affinityRuntime.history.close()
 	return m.affinityRuntime.store.Close()
 }
 
@@ -589,7 +594,7 @@ func (m *Manager) ObserveQuota(lease QuotaLease, observation domain.Snapshot) bo
 	if record.ref != ref {
 		record = quotaRecord{ref: ref, windows: make(map[string]domain.Snapshot)}
 	}
-	changed := false
+	var accepted []domain.Window
 	for _, w := range observation.Windows() {
 		old, ok := record.windows[w.ID()]
 		if ok && !observation.ObservedAt().After(old.ObservedAt()) {
@@ -599,10 +604,13 @@ func (m *Manager) ObserveQuota(lease QuotaLease, observation domain.Snapshot) bo
 			continue
 		}
 		record.windows[w.ID()] = observation.WindowSnapshot(w)
-		changed = true
+		accepted = append(accepted, w)
 	}
 	r.observations[a.ID] = record
-	return changed
+	// recording under these locks only touches memory and a non-blocking queue send,
+	// which keeps history in receipt order; the writer goroutine does all file I/O
+	r.history.record(a.ID, ref.Provider(), observation.ObservedAt(), accepted)
+	return len(accepted) > 0
 }
 
 // PollQuotaOnce performs a bounded read-only pass through authenticated provider transports
@@ -645,6 +653,7 @@ func (m *Manager) PollQuotaOnce(ctx context.Context) {
 	if idle {
 		_ = r.store.Prune(ctx, r.now())
 	}
+	r.history.maybeCompact()
 }
 
 type quotaHTTPDoer struct {

@@ -200,7 +200,7 @@ routing:
   # Strict Claude requires native Messages history; request hooks are rejected
   # quota-aware-chat-affinity:
   #   namespace: "local-chats"
-  #   state-dir: "/var/lib/cliproxy/chat-affinity" # outside auth-dir; one server per directory
+  #   state-dir: "/var/lib/cliproxy/chat-affinity" # outside auth-dir; one server per directory; also keeps 30 days of quota history
   #   idle-retention: "168h"
   #   hard-retention: "720h"
   #   max-bindings: 65536

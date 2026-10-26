@@ -22,6 +22,20 @@ import (
 
 const maxRecordBytes = 4096
 
+// QuotaHistoryFileName is the host-owned quota history log kept beside bindings
+// The store ignores it and its compaction temp file instead of treating them as foreign records
+const QuotaHistoryFileName = "quota-history.jsonl"
+
+// QuotaHistoryTempFileName is the compaction temp file renamed over QuotaHistoryFileName
+const QuotaHistoryTempFileName = QuotaHistoryFileName + ".tmp"
+
+// maxDirectoryEntries allows full binding capacity plus lock, key, one pending write, and the two history files
+const maxDirectoryEntries = 65536 + 3 + 2
+
+func hostOwnedEntry(name string) bool {
+	return name == QuotaHistoryFileName || name == QuotaHistoryTempFileName
+}
+
 type diskRecord struct {
 	SchemaVersion uint32
 	KeyDigest     [32]byte
@@ -117,13 +131,13 @@ func (s *FileStore) initialize() error {
 	if err != nil {
 		return NewError(StoreUnavailable, time.Time{})
 	}
-	if len(entries) > 65539 {
+	if len(entries) > maxDirectoryEntries {
 		return NewError(StoreUnavailable, time.Time{})
 	}
 	bindings := 0
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == ".lock" || name == ".deployment-key" {
+		if name == ".lock" || name == ".deployment-key" || hostOwnedEntry(name) {
 			continue
 		}
 		if strings.HasPrefix(name, ".pending-") {
@@ -387,7 +401,7 @@ func (s *FileStore) prune(now time.Time) (int, error) {
 	changed := false
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == ".lock" || name == ".deployment-key" {
+		if name == ".lock" || name == ".deployment-key" || hostOwnedEntry(name) {
 			continue
 		}
 		b, err := s.read(name)
@@ -471,12 +485,12 @@ func readEntries(path string) ([]os.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entries, errRead := dir.ReadDir(65540)
+	entries, errRead := dir.ReadDir(maxDirectoryEntries + 1)
 	errClose := dir.Close()
 	if errors.Is(errRead, io.EOF) {
 		errRead = nil
 	}
-	if len(entries) > 65539 {
+	if len(entries) > maxDirectoryEntries {
 		return nil, NewError(StoreUnavailable, time.Time{})
 	}
 	return entries, errors.Join(errRead, errClose)
