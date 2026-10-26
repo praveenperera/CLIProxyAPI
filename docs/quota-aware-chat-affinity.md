@@ -102,7 +102,7 @@ Read the history from `GET /v8/management/quota/history`. The optional `since` a
 }
 ```
 
-`quota_weight` comes from an optional top-level `quota_weight` number in the credential's auth file and defaults to 1. It tells pooled views how large one credential's quota is against others of the same provider. For example, set it to 2 on a Claude Max 20x credential pooled with Max 5x credentials, since its weekly limit is roughly twice as large. Routing does not use it. Set it in the management panel's account settings under **Quota weight**, or with `PATCH /v8/management/credentials/fields` and a body such as `{"name": "<file>", "quota_weight": 2}`. The value must be above 0 and at most 1000; `null` removes it.
+`quota_weight` comes from an optional top-level `quota_weight` number in the credential's auth file and defaults to 1. It tells pooled views how large one credential's quota is against others of the same provider. For Claude, count in Pro plans: 1 for Pro, 5 for Max 5x, and 10 for Max 20x, since a Max 20x weekly limit is only about twice a Max 5x's. Routing does not use it. Set it in the management panel's account settings under **Quota weight**, or with `PATCH /v8/management/credentials/fields` and a body such as `{"name": "<file>", "quota_weight": 10}`. The value must be above 0 and at most 1000; `null` removes it.
 
 Without this profile, the endpoint returns `"enabled": false` and no credentials.
 
