@@ -58,7 +58,8 @@ type QuotaHistoryCredential struct {
 	QuotaWeight float64
 	// Email is the account email from the auth file, or empty when it has none
 	Email string
-	// PlanType is the plan_type recorded in the auth file, such as Codex's prolite, or empty
+	// PlanType is the credential's plan, such as Codex's prolite, from its auth file or Codex id token,
+	// or empty when unknown
 	PlanType string
 	// Windows is sorted by window ID
 	Windows []QuotaHistoryWindow
@@ -522,7 +523,11 @@ func (m *Manager) QuotaHistory(since, until time.Time) QuotaHistory {
 		credential.QuotaWeight = quotaWeight(a.Metadata)
 		// read the metadata directly: AccountInfo returns the key itself for API-key credentials
 		credential.Email = metadataString(a.Metadata, "email")
-		credential.PlanType = metadataString(a.Metadata, "plan_type")
+		// the file synthesizer derives Codex plans from the id token when the file has no plan_type
+		credential.PlanType = strings.TrimSpace(a.Attributes["plan_type"])
+		if credential.PlanType == "" {
+			credential.PlanType = metadataString(a.Metadata, "plan_type")
+		}
 		sort.Slice(credential.Windows, func(i, j int) bool { return credential.Windows[i].ID < credential.Windows[j].ID })
 		result.Credentials = append(result.Credentials, credential)
 	}

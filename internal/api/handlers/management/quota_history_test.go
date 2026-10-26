@@ -45,7 +45,7 @@ func TestGetQuotaHistoryShapeAndDisabled(t *testing.T) {
 			t.Error(errClose)
 		}
 	})
-	auth := &coreauth.Auth{ID: "history-auth", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "fake-key", "base_url": "https://fake.invalid"}, Metadata: map[string]any{"email": " user@example.com ", "plan_type": "prolite"}}
+	auth := &coreauth.Auth{ID: "history-auth", Provider: "codex", Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "fake-key", "base_url": "https://fake.invalid", "plan_type": "prolite"}, Metadata: map[string]any{"email": " user@example.com "}}
 	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
 		t.Fatal(errRegister)
 	}
