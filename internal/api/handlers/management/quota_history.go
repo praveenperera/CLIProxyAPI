@@ -21,10 +21,12 @@ type quotaHistoryResponse struct {
 }
 
 type quotaHistoryCredentialEntry struct {
-	AuthID    string                    `json:"auth_id"`
-	AuthIndex string                    `json:"auth_index"`
-	Provider  string                    `json:"provider"`
-	Windows   []quotaHistoryWindowEntry `json:"windows"`
+	AuthID    string `json:"auth_id"`
+	AuthIndex string `json:"auth_index"`
+	Provider  string `json:"provider"`
+	// QuotaWeight sizes this credential against others of its provider when pooling
+	QuotaWeight float64                   `json:"quota_weight"`
+	Windows     []quotaHistoryWindowEntry `json:"windows"`
 }
 
 type quotaHistoryWindowEntry struct {
@@ -63,7 +65,7 @@ func (h *Handler) GetQuotaHistory(c *gin.Context) {
 	history := h.authManager.QuotaHistory(since, until)
 	resp.Enabled = history.Enabled
 	for _, credential := range history.Credentials {
-		entry := quotaHistoryCredentialEntry{AuthID: credential.AuthID, AuthIndex: credential.AuthIndex, Provider: credential.Provider, Windows: make([]quotaHistoryWindowEntry, 0, len(credential.Windows))}
+		entry := quotaHistoryCredentialEntry{AuthID: credential.AuthID, AuthIndex: credential.AuthIndex, Provider: credential.Provider, QuotaWeight: credential.QuotaWeight, Windows: make([]quotaHistoryWindowEntry, 0, len(credential.Windows))}
 		for _, window := range credential.Windows {
 			windowEntry := quotaHistoryWindowEntry{ID: window.ID, PeriodSeconds: int64(window.Period / time.Second), Points: make([]quotaHistoryPointEntry, 0, len(window.Points))}
 			for _, point := range window.Points {

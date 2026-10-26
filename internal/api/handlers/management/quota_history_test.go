@@ -76,7 +76,7 @@ func TestGetQuotaHistoryShapeAndDisabled(t *testing.T) {
 		t.Fatal(errDecode)
 	}
 	want := quotaHistoryResponse{Enabled: true, RetentionSeconds: 2592000, Credentials: []quotaHistoryCredentialEntry{{
-		AuthID: "history-auth", AuthIndex: auth.EnsureIndex(), Provider: "codex",
+		AuthID: "history-auth", AuthIndex: auth.EnsureIndex(), Provider: "codex", QuotaWeight: 1,
 		Windows: []quotaHistoryWindowEntry{{ID: "seven_day", PeriodSeconds: 604800, Points: []quotaHistoryPointEntry{{T: observed.Unix(), Remaining: 83.5, ResetAt: reset.Unix()}}}},
 	}}}
 	got, _ := json.Marshal(payload)

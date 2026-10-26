@@ -82,8 +82,20 @@ func TestQuotaHistoryRecordsDownsamplesPersistsAndPrunes(t *testing.T) {
 		t.Fatalf("history = %+v", history)
 	}
 	credential := history.Credentials[0]
-	if credential.AuthID != ids[0] || credential.Provider != "codex" || credential.AuthIndex == "" || credential.AuthIndex != auth.EnsureIndex() {
+	if credential.AuthID != ids[0] || credential.Provider != "codex" || credential.AuthIndex == "" || credential.AuthIndex != auth.EnsureIndex() || credential.QuotaWeight != 1 {
 		t.Fatalf("credential = %+v", credential)
+	}
+
+	// a larger plan's auth file sets quota_weight so pooled views count it for more
+	if auth.Metadata == nil {
+		auth.Metadata = map[string]any{}
+	}
+	auth.Metadata["quota_weight"] = float64(2)
+	if _, errUpdate := m.Update(context.Background(), auth); errUpdate != nil {
+		t.Fatal(errUpdate)
+	}
+	if weighted := m.QuotaHistory(base.Add(-time.Hour), now); weighted.Credentials[0].QuotaWeight != 2 {
+		t.Fatalf("weighted credential = %+v", weighted.Credentials[0])
 	}
 	if len(credential.Windows) != 1 || credential.Windows[0].ID != "primary" || credential.Windows[0].Period != 5*time.Hour {
 		t.Fatalf("windows = %+v", credential.Windows)

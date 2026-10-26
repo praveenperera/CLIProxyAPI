@@ -52,6 +52,9 @@ type QuotaHistoryCredential struct {
 	AuthID    string
 	AuthIndex string
 	Provider  string
+	// QuotaWeight is the credential's quota size relative to its provider's other credentials,
+	// from the optional quota_weight field in its auth file; it defaults to 1
+	QuotaWeight float64
 	// Windows is sorted by window ID
 	Windows []QuotaHistoryWindow
 }
@@ -511,9 +514,19 @@ func (m *Manager) QuotaHistory(since, until time.Time) QuotaHistory {
 			continue
 		}
 		credential.AuthIndex = a.EnsureIndex()
+		credential.QuotaWeight = quotaWeight(a.Metadata)
 		sort.Slice(credential.Windows, func(i, j int) bool { return credential.Windows[i].ID < credential.Windows[j].ID })
 		result.Credentials = append(result.Credentials, credential)
 	}
 	sort.Slice(result.Credentials, func(i, j int) bool { return result.Credentials[i].AuthID < result.Credentials[j].AuthID })
 	return result
+}
+
+// quotaWeight reads a positive quota_weight from auth metadata; plans of one provider can differ in
+// size, such as Claude Max 20x and 5x, so pooled views weight each credential's remaining share
+func quotaWeight(metadata map[string]any) float64 {
+	if value, ok := metadata["quota_weight"].(float64); ok && value > 0 && value <= 1000 {
+		return value
+	}
+	return 1
 }
