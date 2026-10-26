@@ -83,11 +83,16 @@ func (u *affinityUpstream) snapshot() []string {
 
 func affinityHTTPFixture(t *testing.T) (*gin.Engine, *auth.Manager, *affinityUpstream, string) {
 	t.Helper()
+	return affinityHTTPFixtureWithLegacy(t, false)
+}
+
+func affinityHTTPFixtureWithLegacy(t *testing.T, allowLegacy bool) (*gin.Engine, *auth.Manager, *affinityUpstream, string) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	upstream := &affinityUpstream{}
 	server := httptest.NewServer(http.HandlerFunc(upstream.serve))
 	t.Cleanup(server.Close)
-	cfg := &config.Config{Routing: config.RoutingConfig{QuotaAwareChatAffinity: &config.QuotaAffinityConfig{Namespace: "fake-test", StateDir: filepath.Join(t.TempDir(), "bindings")}}}
+	cfg := &config.Config{Routing: config.RoutingConfig{QuotaAwareChatAffinity: &config.QuotaAffinityConfig{Namespace: "fake-test", StateDir: filepath.Join(t.TempDir(), "bindings"), AllowLegacyRequests: allowLegacy}}}
 	manager := auth.NewManager(nil, &auth.FillFirstSelector{}, nil)
 	manager.SetConfig(cfg)
 	manager.SetRetryConfig(3, 0, 0)
@@ -271,6 +276,39 @@ func TestQuotaAffinityWebsocketReconnectRetainsSavedBinding(t *testing.T) {
 	}
 	if err == nil || response == nil || response.StatusCode != 400 {
 		t.Fatal("websocket cold start accepted")
+	}
+}
+
+func TestQuotaAffinityAllowLegacyRequestsKeepsHeaderChatsStrict(t *testing.T) {
+	for _, allowLegacy := range []bool{false, true} {
+		t.Run(fmt.Sprint(allowLegacy), func(t *testing.T) {
+			router, _, upstream, model := affinityHTTPFixtureWithLegacy(t, allowLegacy)
+			legacy := affinityHTTPCall(router, "Bearer fake-caller-a", "", "", "", model, true)
+			if !allowLegacy {
+				if legacy.Code != http.StatusBadRequest || !strings.Contains(legacy.Body.String(), "chat_identity_required") {
+					t.Fatalf("header-less request without opt-in = %d %s", legacy.Code, legacy.Body.String())
+				}
+				if len(upstream.snapshot()) != 0 {
+					t.Fatalf("rejected request reached upstream %v", upstream.snapshot())
+				}
+				return
+			}
+			if legacy.Code != http.StatusOK || legacy.Header().Get(affinity.ChatHandleHeader) != "" {
+				t.Fatalf("legacy request = %d handle %q %s", legacy.Code, legacy.Header().Get(affinity.ChatHandleHeader), legacy.Body.String())
+			}
+			// a chat header still opts the request into strict validation
+			invalid := affinityHTTPCall(router, "Bearer fake-caller-a", "", "start", "", model, true)
+			if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), "chat_identity_invalid") {
+				t.Fatalf("partial chat headers = %d %s", invalid.Code, invalid.Body.String())
+			}
+			started := affinityHTTPCall(router, "Bearer fake-caller-a", "chat-1", "start", "", model, true)
+			if started.Code != http.StatusOK || started.Header().Get(affinity.ChatHandleHeader) == "" {
+				t.Fatalf("strict start = %d %s", started.Code, started.Body.String())
+			}
+			if got := len(upstream.snapshot()); got != 2 {
+				t.Fatalf("upstream attempts = %d", got)
+			}
+		})
 	}
 }
 

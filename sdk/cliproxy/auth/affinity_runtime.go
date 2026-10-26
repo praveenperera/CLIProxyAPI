@@ -116,6 +116,16 @@ func (m *Manager) QuotaAffinityNamespace() string {
 	return m.affinityRuntime.settings.Namespace
 }
 
+// QuotaAffinityAllowsLegacy reports whether requests without chat headers may use fallback routing
+func (m *Manager) QuotaAffinityAllowsLegacy() bool {
+	if m == nil {
+		return false
+	}
+	m.affinityMu.Lock()
+	defer m.affinityMu.Unlock()
+	return m.affinityRuntime != nil && m.affinityRuntime.settings.AllowLegacyRequests
+}
+
 // NewChatRequest creates an SDK request from an authenticated host caller
 // The host must not obtain caller identity from untrusted client identity headers
 func (m *Manager) NewChatRequest(caller affinity.CallerScope, chat affinity.ChatID, intent affinity.Intent, handle affinity.Handle) (affinity.Request, error) {

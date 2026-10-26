@@ -24,6 +24,9 @@ type QuotaAffinityConfig struct {
 	MaxQuotaAge     string `yaml:"max-quota-age,omitempty" json:"max-quota-age,omitempty"`
 	PollInterval    string `yaml:"poll-interval,omitempty" json:"poll-interval,omitempty"`
 	PollConcurrency int    `yaml:"poll-concurrency,omitempty" json:"poll-concurrency,omitempty"`
+	// AllowLegacyRequests routes requests without chat headers through the fallback strategy
+	// Clients such as Claude Code and Codex cannot carry a saved chat handle between turns
+	AllowLegacyRequests bool `yaml:"allow-legacy-requests,omitempty" json:"allow-legacy-requests,omitempty"`
 }
 
 // QuotaAffinitySettings is the validated runtime profile
@@ -31,6 +34,7 @@ type QuotaAffinitySettings struct {
 	Namespace, StateDir                                     string
 	IdleRetention, HardRetention, MaxQuotaAge, PollInterval time.Duration
 	MaxBindings, PollConcurrency                            int
+	AllowLegacyRequests                                     bool
 }
 
 func affinityDuration(raw string, fallback time.Duration) (time.Duration, error) {
@@ -71,6 +75,7 @@ func (cfg *Config) QuotaAffinitySettings() (QuotaAffinitySettings, error) {
 		}
 	}
 	s.Namespace = p.Namespace
+	s.AllowLegacyRequests = p.AllowLegacyRequests
 	s.StateDir = filepath.Clean(p.StateDir)
 	authPath := cfg.AuthDir
 	if authPath == "" {
@@ -125,7 +130,7 @@ func (p *QuotaAffinityConfig) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.MappingNode {
 		return fmt.Errorf("quota affinity profile must be a mapping")
 	}
-	known := map[string]bool{"namespace": true, "state-dir": true, "idle-retention": true, "hard-retention": true, "max-bindings": true, "max-quota-age": true, "poll-interval": true, "poll-concurrency": true}
+	known := map[string]bool{"namespace": true, "state-dir": true, "idle-retention": true, "hard-retention": true, "max-bindings": true, "max-quota-age": true, "poll-interval": true, "poll-concurrency": true, "allow-legacy-requests": true}
 	for i := 0; i < len(node.Content); i += 2 {
 		if !known[node.Content[i].Value] {
 			return fmt.Errorf("unknown quota affinity field")

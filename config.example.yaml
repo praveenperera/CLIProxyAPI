@@ -207,6 +207,7 @@ routing:
   #   max-quota-age: "5m"
   #   poll-interval: "1m"
   #   poll-concurrency: 4
+  #   allow-legacy-requests: false # true lets requests without chat headers (Claude Code, Codex) use the normal strategy
 
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false

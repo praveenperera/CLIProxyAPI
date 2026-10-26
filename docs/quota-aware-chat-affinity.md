@@ -19,6 +19,7 @@ routing:
     max-quota-age: 5m
     poll-interval: 1m
     poll-concurrency: 4
+    allow-legacy-requests: false
 ```
 
 Use an absolute state path outside `auth-dir`. Only one server can use this directory. Keep the directory and its key across restarts. A lost directory or key invalidates saved chat handles. The directory contains private routing state and quota history, not provider tokens. Missing directory components are created with private permissions. Each parent entry is synchronized before the store can admit a request. A creation, synchronization, write, close, or rename error prevents dispatch. An uncertain write disables the open store until restart.
@@ -30,6 +31,14 @@ These values are the defaults, except for the required namespace and state path.
 A reload can change other settings while it keeps the same validated profile. To enable, disable, or change the profile, stop and restart the server. An unsafe reload is rejected. Saved bindings and active turns stay in place.
 
 Strict routing supports the local Codex and native Claude executors. Other providers and remote or plugin dispatch are not supported by this profile.
+
+## Requests without chat headers
+
+By default, every request must carry the chat headers below and is rejected with `chat_identity_required` otherwise. Clients such as Claude Code and the Codex CLI cannot save a chat handle between turns, so they cannot use strict chats.
+
+Set `allow-legacy-requests: true` to let them share the server. A request with no `X-CLIProxy-Chat-*` header then uses the normal `strategy`, priorities, and retries, and may move to another credential when one fails. Any request that carries a chat header is still validated and pinned as a strict chat. Quota polling and history keep running for every credential. Changing this field needs a restart, like the rest of the profile.
+
+Point a client at the server with its usual base URL setting and a server API key. For Claude Code, set `ANTHROPIC_BASE_URL` to the server URL and `ANTHROPIC_AUTH_TOKEN` to the key. For Codex, add a model provider with `base_url` set to the server URL plus `/v1`, `wire_api = "responses"`, and an `env_key` naming the variable that holds the key.
 
 ## Start and continue a chat
 

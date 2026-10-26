@@ -37,6 +37,10 @@ func (h *BaseAPIHandler) captureChatBoundary(ctx context.Context) context.Contex
 	namespace := ""
 	if h.AuthManager != nil {
 		namespace = h.AuthManager.QuotaAffinityNamespace()
+		// an empty namespace makes a header-less request legacy, while any chat header stays strict
+		if namespace != "" && h.AuthManager.QuotaAffinityAllowsLegacy() && !hasLocalChatHeader(ginCtx.Request.Header) {
+			namespace = ""
+		}
 	}
 	b.request, b.err = affinity.ParseHeaders(namespace, caller, ginCtx.Request.Header)
 	b.bound = func(handle affinity.Handle) { ginCtx.Writer.Header().Set(affinity.ChatHandleHeader, handle.Encode()) }
@@ -44,6 +48,15 @@ func (h *BaseAPIHandler) captureChatBoundary(ctx context.Context) context.Contex
 	ginCtx.Request = ginCtx.Request.Clone(ginCtx.Request.Context())
 	ginCtx.Request.Header = affinity.StripHeaders(ginCtx.Request.Header)
 	return context.WithValue(ctx, chatBoundaryKey{}, b)
+}
+
+func hasLocalChatHeader(headers http.Header) bool {
+	for name := range headers {
+		if affinity.IsLocalHeader(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *BaseAPIHandler) prepareChatAffinity(ctx context.Context) (context.Context, *interfaces.ErrorMessage) {
