@@ -20,6 +20,28 @@ const maxUsageBytes = 1 << 20
 
 var errObservation = errors.New("quota observation unavailable")
 
+// RateLimitedError reports that the provider refused a usage read with HTTP 429
+// RetryAfter is zero when the provider sent no usable Retry-After header
+type RateLimitedError struct{ RetryAfter time.Duration }
+
+func (*RateLimitedError) Error() string { return "quota observation rate limited" }
+
+// Is keeps rate limiting classified as an unavailable observation for existing callers
+func (*RateLimitedError) Is(target error) bool { return target == errObservation }
+
+func retryAfter(header string, now time.Time) time.Duration {
+	if seconds, err := strconv.ParseInt(header, 10, 64); err == nil {
+		if seconds <= 0 || seconds > int64(24*time.Hour/time.Second) {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(header); err == nil && at.After(now) {
+		return min(at.Sub(now), 24*time.Hour)
+	}
+	return 0
+}
+
 // HTTPDoer is an authenticated host transport; provider credentials remain host-owned
 type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
@@ -79,6 +101,9 @@ func fetchUsage(ctx context.Context, client HTTPDoer, ref affinity.CredentialRef
 	errClose := response.Body.Close()
 	if ctx.Err() != nil {
 		return domain.Snapshot{}, ctx.Err()
+	}
+	if response.StatusCode == http.StatusTooManyRequests {
+		return domain.Snapshot{}, &RateLimitedError{RetryAfter: retryAfter(response.Header.Get("Retry-After"), received)}
 	}
 	if response.StatusCode != http.StatusOK || errRead != nil || errClose != nil || len(body) > maxUsageBytes {
 		return domain.Snapshot{}, errObservation

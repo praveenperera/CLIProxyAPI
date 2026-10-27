@@ -894,3 +894,44 @@ func TestQuotaAffinityAuthReloadKeepsBindingBusyAndFencesObservations(t *testing
 		}
 	}
 }
+
+func TestQuotaPollBacksOffRateLimitedCredential(t *testing.T) {
+	m, e, _, _, ids := affinityFixture(t)
+	for _, id := range ids {
+		a, _ := m.GetByID(id)
+		a.Attributes = map[string]string{AttributeAuthKind: AuthKindOAuth}
+		a.Metadata = map[string]any{"account_id": id, "oauth_provenance": testProvenance(t, id, "fake"), "access_token": "fake"}
+		if _, err := m.Update(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now().UTC()
+	m.affinityRuntime.now = func() time.Time { return now }
+	var calls atomic.Int32
+	status := http.StatusTooManyRequests
+	e.usage = func(context.Context, *Auth, *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":3600,"reset_after_seconds":3600}}}`))}, nil
+	}
+	m.PollQuotaOnce(context.Background())
+	first := calls.Load()
+	if first == 0 {
+		t.Fatal("no usage reads")
+	}
+	m.PollQuotaOnce(context.Background())
+	if calls.Load() != first {
+		t.Fatal("rate limited credentials polled again during backoff")
+	}
+	now = now.Add(maxPollBackoff + time.Second)
+	status = http.StatusOK
+	m.PollQuotaOnce(context.Background())
+	if calls.Load() != 2*first {
+		t.Fatal("credentials not polled after backoff expired")
+	}
+	m.affinityMu.Lock()
+	remaining := len(m.affinityRuntime.pollBackoff)
+	m.affinityMu.Unlock()
+	if remaining != 0 {
+		t.Fatal("success kept backoff")
+	}
+}

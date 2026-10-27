@@ -205,7 +205,7 @@ routing:
   #   hard-retention: "720h"
   #   max-bindings: 65536
   #   max-quota-age: "5m"
-  #   poll-interval: "1m"
+  #   poll-interval: "1m" # a credential whose usage read gets HTTP 429 backs off (15 minutes or 3 intervals, doubling, honoring Retry-After, up to 1h) until a read succeeds
   #   poll-concurrency: 4
   #   allow-legacy-requests: false # true lets requests without chat headers (Claude Code, Codex) use the normal strategy
 

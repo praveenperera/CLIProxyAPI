@@ -27,8 +27,22 @@ type affinityRuntime struct {
 	now          func() time.Time
 	pollSlots    chan struct{}
 	polling      map[string]bool
+	pollBackoff  map[string]pollBackoff
 	history      *quotaHistory
 }
+
+// pollBackoff delays the next usage read for a credential the provider rate limited
+type pollBackoff struct {
+	until    time.Time
+	failures int
+}
+
+// pollBackoffFloor is the shortest wait after a 429; Claude's usage endpoint keeps its limit
+// in place for retries at the polling interval, so the first wait must be well past it
+const pollBackoffFloor = 15 * time.Minute
+
+// maxPollBackoff bounds how long a rate limited credential goes without a usage read
+const maxPollBackoff = time.Hour
 
 type quotaRecord struct {
 	ref     affinity.CredentialRef
@@ -59,7 +73,7 @@ func (m *Manager) ConfigureQuotaAffinity(cfg *internalconfig.Config) error {
 	if err != nil {
 		return err
 	}
-	runtime := &affinityRuntime{settings: settings, retention: retention, busy: make(map[affinity.ChatKey]bool), observations: make(map[string]quotaRecord), now: time.Now, pollSlots: make(chan struct{}, settings.PollConcurrency), polling: make(map[string]bool)}
+	runtime := &affinityRuntime{settings: settings, retention: retention, busy: make(map[affinity.ChatKey]bool), observations: make(map[string]quotaRecord), now: time.Now, pollSlots: make(chan struct{}, settings.PollConcurrency), polling: make(map[string]bool), pollBackoff: make(map[string]pollBackoff)}
 	store, err := affinity.OpenFileStoreWithClock(settings.StateDir, retention, func() time.Time { return runtime.now() })
 	if err != nil {
 		return err
@@ -689,6 +703,10 @@ func (m *Manager) pollQuotaCredential(ctx context.Context, id string, r *affinit
 		m.affinityMu.Unlock()
 		return
 	}
+	if r.pollBackoff[id].until.After(r.now()) {
+		m.affinityMu.Unlock()
+		return
+	}
 	r.polling[id] = true
 	m.affinityMu.Unlock()
 	defer func() { m.affinityMu.Lock(); delete(r.polling, id); m.affinityMu.Unlock() }()
@@ -735,8 +753,33 @@ func (m *Manager) pollQuotaCredential(ctx context.Context, id string, r *affinit
 	account, _ := a.Metadata["account_id"].(string)
 	s, err := runtimequota.FetchUsage(ctx, quotaHTTPDoer{m, lease, e, a}, lease.ref, account)
 	if err == nil {
+		m.affinityMu.Lock()
+		delete(r.pollBackoff, id)
+		m.affinityMu.Unlock()
 		m.ObserveQuota(lease, s)
+		return
 	}
+	var limited *runtimequota.RateLimitedError
+	if errors.As(err, &limited) {
+		m.backOffQuotaPoll(r, id, limited.RetryAfter)
+	}
+}
+
+// backOffQuotaPoll widens the gap between usage reads after a 429 so repeated passes
+// stop extending the provider's limit; the wait starts at three poll intervals (at least
+// pollBackoffFloor) and doubles, Retry-After wins when it is longer, and any success clears it
+func (m *Manager) backOffQuotaPoll(r *affinityRuntime, id string, retryAfter time.Duration) {
+	m.affinityMu.Lock()
+	defer m.affinityMu.Unlock()
+	state := r.pollBackoff[id]
+	state.failures++
+	delay := max(3*r.settings.PollInterval, pollBackoffFloor)
+	for i := 1; i < state.failures && delay < maxPollBackoff; i++ {
+		delay *= 2
+	}
+	delay = min(max(delay, retryAfter), maxPollBackoff)
+	state.until = r.now().Add(delay)
+	r.pollBackoff[id] = state
 }
 
 // RunQuotaPoller performs an initial pass and periodic cancellable read-only passes

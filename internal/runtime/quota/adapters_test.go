@@ -210,3 +210,21 @@ func TestFetchFailureCancellationAndSanitizedErrors(t *testing.T) {
 		t.Fatal("parser error leak")
 	}
 }
+
+func TestFetchRateLimitCarriesRetryAfter(t *testing.T) {
+	ref := credential(t, "claude")
+	for header, want := range map[string]time.Duration{"120": 2 * time.Minute, "": 0, "garbage": 0, "-5": 0} {
+		client := doFunc(func(*http.Request) (*http.Response, error) {
+			response := &http.Response{StatusCode: 429, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("secret"))}
+			if header != "" {
+				response.Header.Set("Retry-After", header)
+			}
+			return response, nil
+		})
+		_, err := FetchUsage(context.Background(), client, ref, "")
+		var limited *RateLimitedError
+		if !errors.As(err, &limited) || limited.RetryAfter != want || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("Retry-After %q: %v", header, err)
+		}
+	}
+}
