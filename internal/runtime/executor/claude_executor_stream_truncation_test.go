@@ -939,9 +939,20 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 // An overload reported as the first SSE event reaches the conductor as a stream error with no
 // payload, so it can retry before the client receives anything
 func TestClaudeExecutorStreamLeadingOverloadIsStreamError(t *testing.T) {
+	events := map[string]string{
+		"single line": "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
+		"split data":  "event: error\ndata: {\"type\":\"error\",\ndata: \"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
+	}
+	for name, event := range events {
+		t.Run(name, func(t *testing.T) { assertLeadingOverloadIsStreamError(t, event) })
+	}
+}
+
+func assertLeadingOverloadIsStreamError(t *testing.T, event string) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n")
+		_, _ = fmt.Fprint(w, event)
 	}))
 	defer server.Close()
 

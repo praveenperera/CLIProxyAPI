@@ -140,19 +140,18 @@ func observeClaudeSSEEvent(rawEvent []byte, messageID *string, completed *bool, 
 	}
 }
 
-// isClaudeOverloadedSSEEvent reports an SSE error event whose error type is overloaded_error
+// isClaudeOverloadedSSEEvent reports an SSE error event whose error type is overloaded_error;
+// data lines are joined first because SSE allows one JSON payload to span several of them
 func isClaudeOverloadedSSEEvent(rawEvent []byte) bool {
+	var dataLines [][]byte
 	for _, line := range bytes.Split(rawEvent, []byte("\n")) {
 		trimmed := bytes.TrimSpace(line)
-		if !bytes.HasPrefix(trimmed, []byte("data:")) {
-			continue
-		}
-		payload := gjson.ParseBytes(bytes.TrimSpace(trimmed[len("data:"):]))
-		if payload.Get("type").String() == "error" && payload.Get("error.type").String() == "overloaded_error" {
-			return true
+		if bytes.HasPrefix(trimmed, []byte("data:")) {
+			dataLines = append(dataLines, bytes.TrimSpace(trimmed[len("data:"):]))
 		}
 	}
-	return false
+	payload := gjson.ParseBytes(bytes.Join(dataLines, []byte("\n")))
+	return payload.Get("type").String() == "error" && payload.Get("error.type").String() == "overloaded_error"
 }
 
 func claudeMessageIDFromSSE(data []byte) string {
