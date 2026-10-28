@@ -30,6 +30,10 @@ const cacheUsageSaveInterval = time.Minute
 // cacheUsagePruneInterval limits retention sweeps on the record path
 const cacheUsagePruneInterval = 10 * time.Minute
 
+// cacheUsageLabelPending keeps a session label whose session has no recorded request yet,
+// which covers the first request's run time; labels of requests that never finish then go
+const cacheUsageLabelPending = time.Hour
+
 // CacheUsageTotals counts input tokens by prompt cache outcome; the input buckets are mutually
 // exclusive, so InputTokens = CacheReadTokens + CacheWriteTokens + UncachedTokens
 type CacheUsageTotals struct {
@@ -105,9 +109,13 @@ type CacheUsageSession struct {
 	AuthID          string
 	Provider        string
 	Model           string
-	FirstSeen       time.Time
-	LastSeen        time.Time
-	Totals          CacheUsageTotals
+	// Title is the start of the session's first user prompt and Project the last element of
+	// the client's working directory; either is empty when the request did not carry it
+	Title     string
+	Project   string
+	FirstSeen time.Time
+	LastSeen  time.Time
+	Totals    CacheUsageTotals
 	// LastRequest is the latest request alone, showing whether the cache is warm right now
 	LastRequest CacheUsageTotals
 }
@@ -132,15 +140,25 @@ type cacheUsageSession struct {
 	LastRequest CacheUsageTotals `json:"last_request"`
 }
 
+// cacheUsageLabel names a session; it is kept apart from the session because it is read from
+// the request before the first usage record creates the session
+type cacheUsageLabel struct {
+	Title   string `json:"title,omitempty"`
+	Project string `json:"project,omitempty"`
+	// At is when the label was read, in unix milliseconds
+	At int64 `json:"at_ms"`
+}
+
 type cacheUsageHourRecord struct {
 	cacheUsageHourKey
 	Totals CacheUsageTotals `json:"totals"`
 }
 
 type cacheUsageSnapshot struct {
-	Version  int                    `json:"version"`
-	Hours    []cacheUsageHourRecord `json:"hours"`
-	Sessions []*cacheUsageSession   `json:"sessions"`
+	Version  int                         `json:"version"`
+	Hours    []cacheUsageHourRecord      `json:"hours"`
+	Sessions []*cacheUsageSession        `json:"sessions"`
+	Labels   map[string]*cacheUsageLabel `json:"labels,omitempty"`
 }
 
 // cacheUsage aggregates prompt cache outcomes from usage records by credential hour and session
@@ -152,6 +170,7 @@ type cacheUsage struct {
 	mu        sync.Mutex
 	hours     map[cacheUsageHourKey]*CacheUsageTotals
 	sessions  map[string]*cacheUsageSession
+	labels    map[string]*cacheUsageLabel
 	path      string
 	lastSave  time.Time
 	lastPrune time.Time
@@ -160,7 +179,7 @@ type cacheUsage struct {
 }
 
 func newCacheUsage(now func() time.Time) *cacheUsage {
-	return &cacheUsage{now: now, hours: map[cacheUsageHourKey]*CacheUsageTotals{}, sessions: map[string]*cacheUsageSession{}}
+	return &cacheUsage{now: now, hours: map[cacheUsageHourKey]*CacheUsageTotals{}, sessions: map[string]*cacheUsageSession{}, labels: map[string]*cacheUsageLabel{}}
 }
 
 // persistTo loads the snapshot in dir and saves later changes there
@@ -199,7 +218,38 @@ func (c *cacheUsage) persistTo(dir string) {
 			c.sessions[s.ID] = s
 		}
 	}
+	for id, label := range snapshot.Labels {
+		// a label read since startup is the session's first and wins
+		if label != nil && c.labels[id] == nil {
+			c.labels[id] = label
+		}
+	}
 	c.pruneLocked(c.now())
+}
+
+// hasLabel reports whether the session is already named, so callers skip reading the payload
+func (c *cacheUsage) hasLabel(sessionID string) bool {
+	if c == nil {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.labels[sessionID] != nil
+}
+
+// noteLabel names a session once; later requests carry the same first prompt, or a summary of
+// it after compaction, so the first reading is kept
+func (c *cacheUsage) noteLabel(sessionID, title, project string) {
+	if c == nil || sessionID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.labels[sessionID] != nil {
+		return
+	}
+	c.labels[sessionID] = &cacheUsageLabel{Title: title, Project: project, At: c.now().UnixMilli()}
+	c.dirty = true
 }
 
 // merge folds another view of the same session into s
@@ -312,6 +362,11 @@ func (c *cacheUsage) saveLocked(final bool) {
 		copied := *s
 		snapshot.Sessions = append(snapshot.Sessions, &copied)
 	}
+	snapshot.Labels = make(map[string]*cacheUsageLabel, len(c.labels))
+	for id, label := range c.labels {
+		copied := *label
+		snapshot.Labels[id] = &copied
+	}
 	c.dirty = false
 	c.lastSave = now
 	c.mu.Unlock()
@@ -367,6 +422,7 @@ func (c *cacheUsage) pruneLocked(now time.Time) {
 			delete(c.sessions, id)
 		}
 	}
+	defer c.pruneLabelsLocked(now)
 	if len(c.sessions) <= cacheUsageMaxSessions {
 		return
 	}
@@ -377,6 +433,17 @@ func (c *cacheUsage) pruneLocked(now time.Time) {
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Last < ordered[j].Last })
 	for _, s := range ordered[:len(ordered)-cacheUsageMaxSessions] {
 		delete(c.sessions, s.ID)
+	}
+}
+
+// pruneLabelsLocked drops labels whose session is gone, once a new session's first request has
+// had time to finish and record it
+func (c *cacheUsage) pruneLabelsLocked(now time.Time) {
+	pendingBefore := now.Add(-cacheUsageLabelPending).UnixMilli()
+	for id, label := range c.labels {
+		if c.sessions[id] == nil && label.At < pendingBefore {
+			delete(c.labels, id)
+		}
 	}
 }
 
@@ -434,10 +501,14 @@ func (m *Manager) CacheUsage(q CacheUsageQuery) CacheUsageReport {
 		if s.Last < report.Since.UnixMilli() || s.First >= report.Until.UnixMilli() || (q.AuthID != "" && s.AuthID != q.AuthID) {
 			continue
 		}
-		report.Sessions = append(report.Sessions, CacheUsageSession{
+		session := CacheUsageSession{
 			SessionID: s.ID, ParentSessionID: s.ParentID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model,
 			FirstSeen: time.UnixMilli(s.First), LastSeen: time.UnixMilli(s.Last), Totals: s.Totals, LastRequest: s.LastRequest,
-		})
+		}
+		if label := c.labels[s.ID]; label != nil {
+			session.Title, session.Project = label.Title, label.Project
+		}
+		report.Sessions = append(report.Sessions, session)
 	}
 	c.mu.Unlock()
 	report.Sessions = filterCacheUsageSessions(report.Sessions, q.SessionID)

@@ -50,6 +50,8 @@ type cacheUsageSessionEntry struct {
 	AuthID          string                `json:"auth_id"`
 	Provider        string                `json:"provider"`
 	Model           string                `json:"model"`
+	Title           string                `json:"title,omitempty"`
+	Project         string                `json:"project,omitempty"`
 	FirstSeen       int64                 `json:"first_seen"`
 	LastSeen        int64                 `json:"last_seen"`
 	Totals          cacheUsageTotalsEntry `json:"totals"`
@@ -112,7 +114,7 @@ func (h *Handler) GetCacheUsage(c *gin.Context) {
 		resp.Credentials = append(resp.Credentials, entry)
 	}
 	for _, s := range report.Sessions {
-		resp.Sessions = append(resp.Sessions, cacheUsageSessionEntry{SessionID: s.SessionID, ParentSessionID: s.ParentSessionID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model, FirstSeen: s.FirstSeen.Unix(), LastSeen: s.LastSeen.Unix(), Totals: cacheUsageTotals(s.Totals), LastRequest: cacheUsageTotals(s.LastRequest)})
+		resp.Sessions = append(resp.Sessions, cacheUsageSessionEntry{SessionID: s.SessionID, ParentSessionID: s.ParentSessionID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model, Title: s.Title, Project: s.Project, FirstSeen: s.FirstSeen.Unix(), LastSeen: s.LastSeen.Unix(), Totals: cacheUsageTotals(s.Totals), LastRequest: cacheUsageTotals(s.LastRequest)})
 	}
 	c.JSON(http.StatusOK, resp)
 }

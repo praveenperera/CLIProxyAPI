@@ -485,6 +485,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req exec.Requ
 	if opts.NativeHistory == exec.NativeHistoryPreserve && (m.HomeEnabled() || m.hasPluginScheduler()) {
 		return exec.Response{}, affinity.NewError(affinity.RouteUnsupported, time.Time{})
 	}
+	m.noteCacheUsageLabel(ctx, requestPayload(req, opts))
 	if opts.Affinity.Intent() == affinity.Legacy {
 		return m.executeLegacy(ctx, providers, req, opts)
 	}
@@ -537,6 +538,7 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req exe
 	if opts.NativeHistory == exec.NativeHistoryPreserve && (m.HomeEnabled() || m.hasPluginScheduler()) {
 		return nil, affinity.NewError(affinity.RouteUnsupported, time.Time{})
 	}
+	m.noteCacheUsageLabel(ctx, requestPayload(req, opts))
 	if opts.Affinity.Intent() == affinity.Legacy {
 		return m.executeStreamLegacy(ctx, providers, req, opts)
 	}
