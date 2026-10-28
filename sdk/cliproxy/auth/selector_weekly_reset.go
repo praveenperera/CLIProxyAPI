@@ -87,23 +87,25 @@ func (m *Manager) weeklyQuota(a *Auth, model string) weeklyQuota {
 		return weeklyQuota{}
 	}
 	m.affinityMu.Lock()
-	defer m.affinityMu.Unlock()
 	r := m.affinityRuntime
 	if r == nil {
+		m.affinityMu.Unlock()
 		return weeklyQuota{}
-	}
-	record := r.observations[a.ID]
-	if record.ref != ref {
-		return weeklyQuota{}
-	}
-	observations := make([]domain.Snapshot, 0, len(record.windows))
-	for _, s := range record.windows {
-		observations = append(observations, s)
 	}
 	now := r.now()
+	history := r.history
+	var observations []domain.Snapshot
+	if record := r.observations[a.ID]; record.ref == ref {
+		for _, s := range record.windows {
+			observations = append(observations, s)
+		}
+	}
+	maxAge := r.settings.MaxQuotaAge
+	m.affinityMu.Unlock()
+
 	// exhaustion needs fresh data, since a stale shortage on a rolling window may have eased;
 	// upstream limit errors still put an exhausted credential into cooldown either way
-	result := weeklyQuota{exhausted: domain.Combine(observations, model, now, r.settings.MaxQuotaAge).Denied()}
+	result := weeklyQuota{exhausted: domain.Combine(observations, model, now, maxAge).Denied()}
 	for _, w := range domain.Combine(observations, model, now, weeklyObservationAge).Windows() {
 		if w.Period().Duration() != 7*24*time.Hour && w.Period().CalendarKind() != domain.Week {
 			continue
@@ -116,6 +118,11 @@ func (m *Manager) weeklyQuota(a *Auth, model string) weeklyQuota {
 			result.reset = reset
 			result.remaining, result.hasRemaining = w.Remaining().Value()
 		}
+	}
+	// live observations start empty after a restart and a rate limited usage read can leave a
+	// credential without one for up to an hour; the recorded reset is still correct until it passes
+	if result.reset.IsZero() {
+		result.reset, result.remaining, result.hasRemaining = history.weeklyReset(a.ID, now)
 	}
 	return result
 }

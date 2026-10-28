@@ -250,6 +250,29 @@ func (h *quotaHistory) seriesFor(key quotaHistoryKey) *quotaHistorySeries {
 	return s
 }
 
+// weeklyReset returns the soonest future reset recorded for a credential's weekly windows and
+// the remaining fraction at that point; unlike live observations, the log survives restarts
+func (h *quotaHistory) weeklyReset(authID string, now time.Time) (time.Time, float64, bool) {
+	if h == nil {
+		return time.Time{}, 0, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var best quotaHistoryPoint
+	for key, s := range h.series {
+		if key.authID != authID || s.period != int64(7*24*time.Hour/time.Second) || len(s.points) == 0 {
+			continue
+		}
+		if latest := s.points[len(s.points)-1]; latest.reset > now.Unix() && (best.reset == 0 || latest.reset < best.reset) {
+			best = latest
+		}
+	}
+	if best.reset == 0 {
+		return time.Time{}, 0, false
+	}
+	return time.Unix(best.reset, 0), best.remaining, true
+}
+
 func capQuotaHistoryPoints(points []quotaHistoryPoint) []quotaHistoryPoint {
 	if len(points) > quotaHistoryMaxPoints {
 		return points[len(points)-quotaHistoryMaxPoints:]

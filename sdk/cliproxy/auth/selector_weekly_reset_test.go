@@ -62,6 +62,14 @@ func TestWeeklyResetFirstRoutesLegacyRequestsByWeeklyReset(t *testing.T) {
 		t.Fatalf("new session served %s, want %s", got, ids[1])
 	}
 
+	// a restart empties live observations; the recorded weekly reset still ranks the credential
+	m.affinityMu.Lock()
+	delete(m.affinityRuntime.observations, ids[1])
+	m.affinityMu.Unlock()
+	if got := served("restart without live data"); got != ids[1] {
+		t.Fatalf("after restart served %s, want recorded earlier reset %s", got, ids[1])
+	}
+
 	// usage polls can pause for an hour under rate limiting; the reset time is still right
 	now = now.Add(time.Hour)
 	if got := served("stale observations"); got != ids[1] {
