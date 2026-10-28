@@ -19,7 +19,12 @@ func orderedFixture(t *testing.T) (m *Manager, model string, ids []string, now *
 	current := time.Now().UTC()
 	now = &current
 	m.affinityRuntime.now = func() time.Time { return *now }
-	observe = func(id, window string, period time.Duration, reset time.Time, amount float64) {
+	return m, model, ids, now, quotaObserver(t, m, now)
+}
+
+// quotaObserver records one quota window reading for a credential at *now
+func quotaObserver(t *testing.T, m *Manager, now *time.Time) func(id, window string, period time.Duration, reset time.Time, amount float64) {
+	return func(id, window string, period time.Duration, reset time.Time, amount float64) {
 		t.Helper()
 		lease, err := m.QuotaLease(id)
 		if err != nil {
@@ -38,7 +43,6 @@ func orderedFixture(t *testing.T) (m *Manager, model string, ids []string, now *
 			t.Fatalf("observation rejected: %v", err)
 		}
 	}
-	return m, model, ids, now, observe
 }
 
 // useOrder installs the ordered strategy wrapped in session affinity, as the service does

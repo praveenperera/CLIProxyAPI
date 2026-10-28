@@ -54,6 +54,21 @@ type affinityPin struct{ ref affinity.CredentialRef }
 // ConfigureQuotaAffinity opens the manager-owned store once
 // A running profile cannot change or be removed by reload; restart is required
 func (m *Manager) ConfigureQuotaAffinity(cfg *internalconfig.Config) error {
+	if err := m.configureQuotaAffinity(cfg); err != nil {
+		return err
+	}
+	// restored outside affinityMu since it reads the selector under m.mu
+	m.affinityMu.Lock()
+	var stateDir string
+	if m.affinityRuntime != nil {
+		stateDir = m.affinityRuntime.settings.StateDir
+	}
+	m.affinityMu.Unlock()
+	m.sessionBindings.open(stateDir)
+	return nil
+}
+
+func (m *Manager) configureQuotaAffinity(cfg *internalconfig.Config) error {
 	settings, err := cfg.QuotaAffinitySettings()
 	if err != nil {
 		return err
@@ -108,6 +123,7 @@ func (m *Manager) ValidateQuotaAffinityReload(cfg *internalconfig.Config) error 
 
 // CloseQuotaAffinity closes the local durable store after request cancellation
 func (m *Manager) CloseQuotaAffinity() error {
+	m.sessionBindings.close()
 	m.affinityMu.Lock()
 	defer m.affinityMu.Unlock()
 	if m.affinityRuntime == nil {

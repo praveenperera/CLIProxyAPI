@@ -2,6 +2,7 @@ package auth
 
 import (
 	"container/list"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,8 @@ type SessionCache struct {
 	stopOnce         sync.Once
 	sessionGroups    map[string]map[string]struct{}
 	bindingSequence  uint64
+	// changes counts group writes and removals so a saver can skip unchanged snapshots
+	changes uint64
 }
 
 // NewSessionCache creates a cache with the specified TTL.
@@ -216,6 +219,7 @@ func (c *SessionCache) replaceAliasGroupsLocked(authID string, expiresAt time.Ti
 	}
 	entry := sessionEntry{authID: authID, expiresAt: expiresAt, aliases: append([]string(nil), aliases...), binding: binding}
 	c.groups[primaryKey] = entry
+	c.changes++
 	if binding.sequence != 0 {
 		if c.sessionGroups[binding.sessionID] == nil {
 			c.sessionGroups[binding.sessionID] = make(map[string]struct{})
@@ -255,6 +259,7 @@ func (c *SessionCache) removeAliasGroupLocked(entry sessionEntry) {
 	primaryKey := entry.aliases[0]
 	if currentGroup, ok := c.groups[primaryKey]; ok && sameSessionEntryGroup(currentGroup, entry) {
 		delete(c.groups, primaryKey)
+		c.changes++
 		if groups := c.sessionGroups[entry.binding.sessionID]; groups != nil {
 			delete(groups, primaryKey)
 			if len(groups) == 0 {
@@ -462,7 +467,6 @@ func (c *SessionCache) InvalidateAuth(authID string) {
 	}
 }
 
-// Stop terminates the background cleanup goroutine.
 // setTTL changes how long later bindings and refreshes last; existing expiries are kept
 func (c *SessionCache) setTTL(ttl time.Duration) {
 	if c == nil || ttl <= 0 {
@@ -473,6 +477,82 @@ func (c *SessionCache) setTTL(ttl time.Duration) {
 	c.mu.Unlock()
 }
 
+// sessionCacheRecord is one saved alias group
+type sessionCacheRecord struct {
+	AuthID    string   `json:"auth_id"`
+	ExpiresAt int64    `json:"expires_at_ms"`
+	Aliases   []string `json:"aliases"`
+	SessionID string   `json:"session_id,omitempty"`
+	Provider  string   `json:"provider,omitempty"`
+	Sequence  uint64   `json:"sequence,omitempty"`
+}
+
+// snapshot returns the live alias groups oldest first, the selection sequence, and the change
+// count they reflect
+func (c *SessionCache) snapshot() ([]sessionCacheRecord, uint64, uint64) {
+	if c == nil {
+		return nil, 0, 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	now := time.Now()
+	records := make([]sessionCacheRecord, 0, len(c.groups))
+	for e := c.evictionOrder.Front(); c.evictionOrder != nil && e != nil; e = e.Next() {
+		key, _ := e.Value.(string)
+		group, ok := c.groups[key]
+		if !ok || !now.Before(group.expiresAt) {
+			continue
+		}
+		records = append(records, sessionCacheRecord{
+			AuthID:    group.authID,
+			ExpiresAt: group.expiresAt.UnixMilli(),
+			Aliases:   append([]string(nil), group.aliases...),
+			SessionID: group.binding.sessionID,
+			Provider:  group.binding.provider,
+			Sequence:  group.binding.sequence,
+		})
+	}
+	return records, c.bindingSequence, c.changes
+}
+
+// restore adds saved groups that are still unexpired; a binding made since startup is newer
+// than the saved one, so any group sharing an alias with a live binding is skipped
+func (c *SessionCache) restore(records []sessionCacheRecord, sequence uint64) int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ensureInitializedLocked()
+	now := time.Now()
+	ordered := append([]sessionCacheRecord(nil), records...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].ExpiresAt < ordered[j].ExpiresAt })
+	restored := 0
+	for _, r := range ordered {
+		expiresAt := time.UnixMilli(r.ExpiresAt)
+		aliases := compactSessionAliases(mergeSessionAliases(nil, r.Aliases...))
+		if r.AuthID == "" || len(aliases) == 0 || !now.Before(expiresAt) {
+			continue
+		}
+		live := false
+		for _, alias := range aliases {
+			if entry, ok := c.entries[alias]; ok && now.Before(entry.expiresAt) {
+				live = true
+				break
+			}
+		}
+		if live {
+			continue
+		}
+		binding := sessionBinding{sessionID: r.SessionID, provider: r.Provider, sequence: r.Sequence}
+		c.replaceAliasGroupsLocked(r.AuthID, expiresAt, aliases, binding)
+		restored++
+	}
+	c.bindingSequence = max(c.bindingSequence, sequence)
+	return restored
+}
+
+// Stop terminates the background cleanup goroutine.
 func (c *SessionCache) Stop() {
 	if c == nil {
 		return

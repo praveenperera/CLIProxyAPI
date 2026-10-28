@@ -173,6 +173,8 @@ type Manager struct {
 	affinityRuntime *affinityRuntime
 	// cacheUsage aggregates prompt cache outcomes per credential and session
 	cacheUsage *cacheUsage
+	// sessionBindings saves session affinity bindings in the quota affinity state directory
+	sessionBindings *sessionBindingsStore
 
 	store                     Store
 	cooldownStore             CooldownStateStore
@@ -274,6 +276,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		modelPoolOffsets:      make(map[string]int),
 		cacheUsage:            newCacheUsage(time.Now),
 	}
+	manager.sessionBindings = newSessionBindingsStore(manager.sessionAffinityCache)
 	manager.bindSelectorQuota(selector)
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})

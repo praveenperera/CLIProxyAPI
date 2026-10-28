@@ -178,6 +178,7 @@ routing:
   # credential is kept even if a higher-priority credential recovers. Credential priority
   # still decides cold bindings, requests without a session, and post-failover rebinding.
   # How long session-to-auth bindings are retained. Default: 1h
+  # With quota-aware-chat-affinity, bindings are saved in its state-dir and survive restarts
   session-affinity-ttl: "1h"
   # When true (default), subagents (child sessions with parent references) inherit and bind
   # to the parent's upstream credential across all providers (Claude, Codex, Antigravity, Gemini),

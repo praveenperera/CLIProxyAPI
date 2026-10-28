@@ -35,13 +35,21 @@ const CacheUsageFileName = "cache-usage.json"
 // CacheUsageTempFileName is the temp file renamed over CacheUsageFileName
 const CacheUsageTempFileName = CacheUsageFileName + ".tmp"
 
+// SessionBindingsFileName is the host-owned session affinity snapshot that carries
+// session-to-credential bindings across restarts
+const SessionBindingsFileName = "session-bindings.json"
+
+// SessionBindingsTempFileName is the temp file renamed over SessionBindingsFileName
+const SessionBindingsTempFileName = SessionBindingsFileName + ".tmp"
+
 // maxDirectoryEntries allows full binding capacity plus lock, key, one pending write, and the
-// history and cache usage files with their temp files
-const maxDirectoryEntries = 65536 + 3 + 4
+// history, cache usage and session bindings files with their temp files
+const maxDirectoryEntries = 65536 + 3 + 6
 
 func hostOwnedEntry(name string) bool {
 	switch name {
-	case QuotaHistoryFileName, QuotaHistoryTempFileName, CacheUsageFileName, CacheUsageTempFileName:
+	case QuotaHistoryFileName, QuotaHistoryTempFileName, CacheUsageFileName, CacheUsageTempFileName,
+		SessionBindingsFileName, SessionBindingsTempFileName:
 		return true
 	}
 	return false
