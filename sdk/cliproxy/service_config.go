@@ -55,7 +55,9 @@ type configCommit struct {
 }
 
 type routingRuntimeState struct {
-	strategy                 string
+	strategy string
+	// order is the ordered strategy's criteria joined by commas, keeping the state comparable
+	order                    string
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
 	sessionAffinityRebindOn  string
@@ -79,8 +81,11 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
-	case "weekly-reset-first", "weeklyresetfirst", "wrf":
-		state.strategy = "weekly-reset-first"
+	case config.RoutingStrategyOrdered:
+		state.strategy = config.RoutingStrategyOrdered
+		// invalid orders are rejected before a config is applied
+		order, _ := config.NormalizeRoutingOrder(cfg.Routing.Order)
+		state.order = strings.Join(order, ",")
 	}
 	state.quotaPolling = cfg.Routing.QuotaAwareChatAffinity != nil
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
@@ -119,10 +124,10 @@ func newStrategySelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
-	case "weekly-reset-first":
-		selector = &coreauth.WeeklyResetFirstSelector{}
+	case config.RoutingStrategyOrdered:
+		selector = coreauth.NewOrderedSelector(strings.Split(state.order, ","))
 		if !state.quotaPolling {
-			log.Warn("routing strategy weekly-reset-first has no quota data without routing.quota-aware-chat-affinity and behaves like fill-first")
+			log.Warn("routing strategy ordered has no quota data without routing.quota-aware-chat-affinity; quota criteria tie")
 		}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
@@ -159,6 +164,10 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 	}
 	if errValidate := newCfg.ValidateCredentialWeights(); errValidate != nil {
 		log.WithError(errValidate).Warn("rejected config update with invalid credential weights")
+		return configCommit{}
+	}
+	if errValidate := newCfg.ValidateRoutingOrder(); errValidate != nil {
+		log.WithError(errValidate).Warn("rejected config update with invalid routing order")
 		return configCommit{}
 	}
 

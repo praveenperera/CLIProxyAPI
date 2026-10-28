@@ -65,7 +65,7 @@ func NewSessionCacheWithCapacity(ttl time.Duration, maxEntries int) *SessionCach
 		ttl:              ttl,
 		stopCh:           make(chan struct{}),
 	}
-	go c.cleanupLoop()
+	go c.cleanupLoop(ttl)
 	return c
 }
 
@@ -463,6 +463,16 @@ func (c *SessionCache) InvalidateAuth(authID string) {
 }
 
 // Stop terminates the background cleanup goroutine.
+// setTTL changes how long later bindings and refreshes last; existing expiries are kept
+func (c *SessionCache) setTTL(ttl time.Duration) {
+	if c == nil || ttl <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.ttl = ttl
+	c.mu.Unlock()
+}
+
 func (c *SessionCache) Stop() {
 	if c == nil {
 		return
@@ -474,8 +484,10 @@ func (c *SessionCache) Stop() {
 	})
 }
 
-func (c *SessionCache) cleanupLoop() {
-	interval := c.ttl / 2
+// cleanupLoop takes the construction TTL so it never reads ttl while setTTL changes it; the
+// sweep interval only affects how soon expired entries are freed
+func (c *SessionCache) cleanupLoop(ttl time.Duration) {
+	interval := ttl / 2
 	if interval < time.Millisecond {
 		interval = time.Millisecond
 	}

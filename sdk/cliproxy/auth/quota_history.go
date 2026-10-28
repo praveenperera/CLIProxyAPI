@@ -250,27 +250,33 @@ func (h *quotaHistory) seriesFor(key quotaHistoryKey) *quotaHistorySeries {
 	return s
 }
 
-// weeklyReset returns the soonest future reset recorded for a credential's weekly windows and
-// the remaining fraction at that point; unlike live observations, the log survives restarts
-func (h *quotaHistory) weeklyReset(authID string, now time.Time) (time.Time, float64, bool) {
+// weeklyQuota reads a credential's weekly windows from the latest recorded points, with the
+// same rules as live readings: points older than maxAge or past their reset are ignored, the
+// soonest future reset wins, and the tightest window decides remaining quota, with or without a
+// reset; unlike live observations, the log survives restarts
+func (h *quotaHistory) weeklyQuota(authID string, now time.Time, maxAge time.Duration) windowQuota {
+	var result windowQuota
 	if h == nil {
-		return time.Time{}, 0, false
+		return result
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	var best quotaHistoryPoint
 	for key, s := range h.series {
 		if key.authID != authID || s.period != int64(7*24*time.Hour/time.Second) || len(s.points) == 0 {
 			continue
 		}
-		if latest := s.points[len(s.points)-1]; latest.reset > now.Unix() && (best.reset == 0 || latest.reset < best.reset) {
-			best = latest
+		latest := s.points[len(s.points)-1]
+		if now.Sub(time.Unix(latest.t, 0)) > maxAge || (latest.reset != 0 && latest.reset <= now.Unix()) {
+			continue
+		}
+		if latest.reset != 0 && (result.reset.IsZero() || latest.reset < result.reset.Unix()) {
+			result.reset = time.Unix(latest.reset, 0)
+		}
+		if !result.hasRemaining || latest.remaining < result.remaining {
+			result.remaining, result.hasRemaining = latest.remaining, true
 		}
 	}
-	if best.reset == 0 {
-		return time.Time{}, 0, false
-	}
-	return time.Unix(best.reset, 0), best.remaining, true
+	return result
 }
 
 func capQuotaHistoryPoints(points []quotaHistoryPoint) []quotaHistoryPoint {

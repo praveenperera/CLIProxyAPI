@@ -461,8 +461,12 @@ type RoutingConfig struct {
 
 	// Strategy selects the credential selection strategy.
 	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first",
-	// "weekly-reset-first" (needs quota-aware-chat-affinity for quota data).
+	// "ordered" (ranks by Order; quota criteria need quota-aware-chat-affinity for data).
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+
+	// Order lists the criteria the "ordered" strategy ranks new sessions by, from most to least
+	// important; see RoutingOrderCriteria. Empty uses DefaultRoutingOrder.
+	Order []string `yaml:"order,omitempty" json:"order,omitempty"`
 
 	// Session-sticky routing is always on for all clients, because prompt caches are not
 	// shared across credentials. Explicit Claude Code, Codex, OpenCode, and pi session headers

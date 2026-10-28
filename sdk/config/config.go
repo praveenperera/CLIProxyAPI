@@ -51,6 +51,9 @@ type TLS = internalconfig.TLSConfig
 
 const (
 	DefaultPanelGitHubRepository = internalconfig.DefaultPanelGitHubRepository
+
+	// RoutingStrategyOrdered ranks credentials for new sessions by Routing.Order
+	RoutingStrategyOrdered = internalconfig.RoutingStrategyOrdered
 )
 
 func LoadConfig(configFile string) (*Config, error) { return internalconfig.LoadConfig(configFile) }
@@ -61,6 +64,11 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 func ResolveOAuthModelSetting(settings []OAuthModelSetting, modelID, metadataModelID, modelName string) *OAuthModelSetting {
 	return internalconfig.ResolveOAuthModelSetting(settings, modelID, metadataModelID, modelName)
+}
+
+// NormalizeRoutingOrder validates an ordered-strategy order; empty returns the default order
+func NormalizeRoutingOrder(order []string) ([]string, error) {
+	return internalconfig.NormalizeRoutingOrder(order)
 }
 
 func ParseConfigBytes(data []byte) (*Config, error) { return internalconfig.ParseConfigBytes(data) }

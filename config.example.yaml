@@ -160,9 +160,11 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
-  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, weekly-reset-first
-  # weekly-reset-first keeps traffic on the credential whose weekly quota resets soonest until it is
-  # exhausted or cooling down; it needs quota-aware-chat-affinity below for quota data.
+  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, ordered
+  # ordered ranks new sessions by the criteria in order, earlier ones first: priority, weekly-reset,
+  # session-reset, weekly-remaining, session-remaining. It ranks every priority tier, and quota
+  # criteria need quota-aware-chat-affinity below for data.
+  # order: ["weekly-reset", "session-remaining", "priority"]
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.

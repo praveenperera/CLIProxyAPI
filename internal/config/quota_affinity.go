@@ -56,7 +56,7 @@ func (cfg *Config) QuotaAffinitySettings() (QuotaAffinitySettings, error) {
 	}
 	p := cfg.Routing.QuotaAwareChatAffinity
 	switch strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy)) {
-	case "", "round-robin", "weighted-round-robin", "weightedroundrobin", "wrr", "fill-first", "fillfirst", "ff", "weekly-reset-first", "weeklyresetfirst", "wrf":
+	case "", "round-robin", "weighted-round-robin", "weightedroundrobin", "wrr", "fill-first", "fillfirst", "ff", RoutingStrategyOrdered:
 	default:
 		return s, fmt.Errorf("quota affinity requires a supported fallback strategy")
 	}

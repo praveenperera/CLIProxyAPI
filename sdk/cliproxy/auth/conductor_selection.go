@@ -74,7 +74,7 @@ func (m *Manager) PluginSchedulerWantsAcrossPriorities() bool {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector, *WeeklyResetFirstSelector:
+	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector, *OrderedSelector:
 		return true
 	default:
 		return false
@@ -442,6 +442,11 @@ func (m *Manager) SetSelector(selector Selector) {
 	}
 	// bind before publishing so concurrent Picks never see the quota source change
 	m.bindSelectorQuota(selector)
+	if next, ok := selector.(*SessionAffinitySelector); ok {
+		if previous, okPrevious := oldSelector.(*SessionAffinitySelector); okPrevious {
+			next.adoptBindings(previous)
+		}
+	}
 	m.selector = selector
 	m.mu.Unlock()
 
@@ -633,8 +638,9 @@ func (m *Manager) availableAuthsForRouteModelWithPriorityMode(auths []*Auth, pro
 // or scheduler additionally receives lower priority tiers.
 func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, provider, routeModel string, now time.Time, schedulerAcross bool) (priorityAuths, selectorAuths []*Auth, err error) {
 	_, sessionAffinity := selector.(*SessionAffinitySelector)
+	_, allPriorities := selector.(allPrioritySelector)
 
-	if !sessionAffinity && !schedulerAcross {
+	if !sessionAffinity && !allPriorities && !schedulerAcross {
 		priorityAuths, err = m.availableAuthsForRouteModel(auths, provider, routeModel, now)
 		if err != nil {
 			return nil, nil, err
@@ -660,7 +666,7 @@ func (m *Manager) availableAuthsForSelector(selector Selector, auths []*Auth, pr
 	if sessionAffinity {
 		selectorAuths = allAuths
 	} else {
-		selectorAuths = highestPriorityAuths(allAuths)
+		selectorAuths = selectorCandidates(selector, allAuths)
 	}
 	return priorityAuths, selectorAuths, nil
 }
@@ -1820,8 +1826,9 @@ func (m *Manager) useSchedulerFastPath() bool {
 		return false
 	}
 	selector := m.Selector()
-	// the scheduler cannot order by quota observations, so weekly-reset-first always calls Pick
-	if _, weekly := selector.(*WeeklyResetFirstSelector); weekly {
+	// the scheduler cannot rank by quota observations or across priority tiers, so the ordered
+	// strategy always calls Pick
+	if _, ordered := selector.(*OrderedSelector); ordered {
 		return false
 	}
 	return isBuiltInSelector(selector)

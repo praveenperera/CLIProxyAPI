@@ -206,6 +206,9 @@ func (b *Builder) Build() (*Service, error) {
 	if errValidate := b.cfg.ValidateCredentialWeights(); errValidate != nil {
 		return nil, fmt.Errorf("cliproxy: validate credential weights: %w", errValidate)
 	}
+	if errValidate := b.cfg.ValidateRoutingOrder(); errValidate != nil {
+		return nil, errValidate
+	}
 	if _, errValidate := b.cfg.QuotaAffinitySettings(); errValidate != nil {
 		return nil, errValidate
 	}

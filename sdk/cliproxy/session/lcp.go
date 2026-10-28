@@ -1047,6 +1047,16 @@ func (m *MerklePrefixMatcher) InvalidateAuth(authID string) {
 }
 
 // Clear removes all remembered prefix bindings.
+// SetTTL changes how long later matches and refreshes last; existing expiries are kept
+func (m *MerklePrefixMatcher) SetTTL(ttl time.Duration) {
+	if m == nil || ttl <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.ttl = ttl
+	m.mu.Unlock()
+}
+
 func (m *MerklePrefixMatcher) Clear() {
 	if m == nil {
 		return

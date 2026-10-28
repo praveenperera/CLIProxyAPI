@@ -37,13 +37,31 @@ By default, every request must carry the chat headers below and is rejected with
 
 Set `allow-legacy-requests: true` to let them share the server. A request with no `X-CLIProxy-Chat-*` header then uses session-sticky routing, priorities, and retries: each client session stays on one credential, so its prompt cache stays warm, and the `strategy` places new sessions and moves a session only when its credential fails or cools down. Any request that carries a chat header is still validated and pinned as a strict chat. Quota polling and history keep running for every credential. Changing this field needs a restart, like the rest of the profile.
 
-## Spend the weekly quota that resets first
+## Rank new sessions with a routing order
 
-Set `strategy: weekly-reset-first` to place new sessions on the credential whose weekly quota window resets soonest, so allowance that would expire unused is spent first. New sessions keep going there until it is cooling down after a limit or failure, or a fresh quota reading shows any of its windows exhausted, such as the Claude five-hour session. The next credential by weekly reset then takes new sessions, and they return once the first recovers. When a weekly reset passes, that credential moves behind the others until a new reading arrives. Existing sessions do not follow these changes: they stay on their credential, keeping its prompt cache and account-bound thinking, until it fails or cools down.
+Set `strategy: ordered` and list criteria in `order` to choose where new sessions go:
 
-Only credentials in the highest available priority tier are considered. A weekly reset time stays usable after `max-quota-age` because it does not change during the week, so ordering holds while usage polls back off. After a restart, or when a credential has no live reading yet, the latest reset recorded in `quota-history.jsonl` is used until it passes. Exhaustion uses only fresh readings. Credentials without a known weekly reset come last, in fill-first order. The strategy applies to every provider, so Codex credentials are ordered the same way. For a strict chat, the strategy is the fallback selector used when quota ranking has no data.
+```yaml
+routing:
+  strategy: ordered
+  order: [weekly-reset, session-remaining, priority]
+```
 
-Without this profile there is no quota data, and the strategy behaves like `fill-first` and logs a warning.
+| Criterion | Prefers |
+| --- | --- |
+| `priority` | the higher `priority` field |
+| `weekly-reset` | the weekly window that resets soonest, so allowance that would expire unused is spent first |
+| `session-reset` | the short window, such as the Claude five-hour session, that resets soonest |
+| `weekly-remaining` | the most weekly quota left, scaled by `quota_weight` |
+| `session-remaining` | the most short-window quota left, scaled by `quota_weight` |
+
+Earlier criteria decide and later ones break ties; full ties keep fill-first order. An empty `order` uses `[weekly-reset, session-remaining, priority]`. A credential whose fresh reading shows any window exhausted always ranks last, and one cooling down after a limit or failure is skipped. Credentials without data for a criterion come after those with it.
+
+Unlike the other strategies, `ordered` ranks every priority tier, so `priority` is only as strong as its place in the list; leave it out to ignore it. Existing sessions never follow a change in ranking: they stay on their credential, keeping its prompt cache and account-bound thinking, until it fails or cools down.
+
+A reset time stays usable after `max-quota-age` because it does not change before it passes, so ordering holds while usage polls back off. After a restart, or when a credential has no live reading yet, the latest weekly reset recorded in `quota-history.jsonl` is used until it passes. Remaining short-window quota and exhaustion use only fresh readings. The order applies to every provider, so Codex credentials are ranked the same way. For a strict chat, the strategy is the fallback selector used when quota ranking has no data.
+
+Without this profile there is no quota data, so quota criteria tie and the server logs a warning. Change the order in the management panel under **Config → Network → Routing order**.
 
 Point a client at the server with its usual base URL setting and a server API key. For Claude Code, set `ANTHROPIC_BASE_URL` to the server URL and `ANTHROPIC_AUTH_TOKEN` to the key. For Codex, add a model provider with `base_url` set to the server URL plus `/v1`, `wire_api = "responses"`, and an `env_key` naming the variable that holds the key.
 
@@ -110,7 +128,7 @@ Read the history from `GET /v8/management/quota/history`. The optional `since` a
 }
 ```
 
-`quota_weight` comes from an optional top-level `quota_weight` number in the credential's auth file and defaults to 1. It tells pooled views how large one credential's quota is against others of the same provider. For Claude, count in Pro plans: 1 for Pro, 5 for Max 5x, and 10 for Max 20x, since a Max 20x weekly limit is only about twice a Max 5x's. Routing does not use it. Set it in the management panel's account settings under **Quota weight**, or with `PATCH /v8/management/credentials/fields` and a body such as `{"name": "<file>", "quota_weight": 10}`. The value must be above 0 and at most 1000; `null` removes it.
+`quota_weight` comes from an optional top-level `quota_weight` number in the credential's auth file and defaults to 1. It tells pooled views how large one credential's quota is against others of the same provider. For Claude, count in Pro plans: 1 for Pro, 5 for Max 5x, and 10 for Max 20x, since a Max 20x weekly limit is only about twice a Max 5x's. The `weekly-remaining` and `session-remaining` routing criteria scale remaining quota by it; other routing ignores it. Set it in the management panel's account settings under **Quota weight**, or with `PATCH /v8/management/credentials/fields` and a body such as `{"name": "<file>", "quota_weight": 10}`. The value must be above 0 and at most 1000; `null` removes it.
 
 Without this profile, the endpoint returns `"enabled": false` and no credentials.
 

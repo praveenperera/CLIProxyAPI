@@ -277,6 +277,8 @@ func (m *Manager) coldAffinityAuth(ctx context.Context, providers []string, mode
 	}
 	forced := pinnedAuthIDFromMetadata(opts.Metadata)
 	candidates := make([]domain.Candidate, 0)
+	// usable lists every candidate a fallback selector that ranks priority itself may choose
+	usable := make([]string, 0)
 	auths := make(map[string]*Auth)
 	refs := make(map[string]affinity.CredentialRef)
 	var rejected error
@@ -293,11 +295,16 @@ func (m *Manager) coldAffinityAuth(ctx context.Context, providers []string, mode
 			rejected = err
 			continue
 		}
-		candidate, err := domain.NewCandidate(a.ID, authPriority(a), float64(authWeight(a)), m.affinityView(ref, model))
+		view := m.affinityView(ref, model)
+		candidate, err := domain.NewCandidate(a.ID, authPriority(a), float64(authWeight(a)), view)
 		if err != nil {
 			return ref, err
 		}
 		candidates = append(candidates, candidate)
+		// the same eligibility as ranking, without the highest-tier restriction
+		if authWeight(a) > 0 && !view.Denied() {
+			usable = append(usable, a.ID)
+		}
 		auths[a.ID] = a
 		refs[a.ID] = ref
 	}
@@ -305,8 +312,16 @@ func (m *Manager) coldAffinityAuth(ctx context.Context, providers []string, mode
 	if winner := admission.Winner(); winner != "" {
 		return refs[winner], nil
 	}
+	selector, ok := strictFallbackSelector(m.Selector())
+	if !ok {
+		return affinity.CredentialRef{}, affinity.NewError(affinity.RouteUnsupported, time.Time{})
+	}
+	fallbackIDs := admission.Fallback()
+	if all, okAll := selector.(allPrioritySelector); okAll && all.ranksAllPriorities() {
+		fallbackIDs = usable
+	}
 	fallback := make([]*Auth, 0)
-	for _, id := range admission.Fallback() {
+	for _, id := range fallbackIDs {
 		fallback = append(fallback, auths[id])
 	}
 	if len(fallback) == 0 {
@@ -316,10 +331,6 @@ func (m *Manager) coldAffinityAuth(ctx context.Context, providers []string, mode
 		return affinity.CredentialRef{}, affinity.NewError(affinity.RouteUnsupported, time.Time{})
 	}
 	sort.Slice(fallback, func(i, j int) bool { return fallback[i].ID < fallback[j].ID })
-	selector, ok := strictFallbackSelector(m.Selector())
-	if !ok {
-		return affinity.CredentialRef{}, affinity.NewError(affinity.RouteUnsupported, time.Time{})
-	}
 	selected, err := selector.Pick(ctx, "mixed", model, opts, fallback)
 	if err != nil {
 		return affinity.CredentialRef{}, err
