@@ -1,0 +1,472 @@
+package auth
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
+)
+
+// CacheUsageRetention is how long hourly prompt cache totals are kept
+const CacheUsageRetention = 30 * 24 * time.Hour
+
+// cacheUsageSessionIdle drops sessions that have not sent a request for this long
+const cacheUsageSessionIdle = 7 * 24 * time.Hour
+
+// cacheUsageMaxSessions caps tracked sessions; the least recently active are dropped first
+const cacheUsageMaxSessions = 2000
+
+// cacheUsageSaveInterval limits snapshot rewrites; a final save runs when the profile closes
+const cacheUsageSaveInterval = time.Minute
+
+// cacheUsagePruneInterval limits retention sweeps on the record path
+const cacheUsagePruneInterval = 10 * time.Minute
+
+// CacheUsageTotals counts input tokens by prompt cache outcome; the input buckets are mutually
+// exclusive, so InputTokens = CacheReadTokens + CacheWriteTokens + UncachedTokens
+type CacheUsageTotals struct {
+	Requests         int64 `json:"requests"`
+	InputTokens      int64 `json:"input_tokens"`
+	CacheReadTokens  int64 `json:"cache_read_tokens"`
+	CacheWriteTokens int64 `json:"cache_write_tokens"`
+	UncachedTokens   int64 `json:"uncached_tokens"`
+	OutputTokens     int64 `json:"output_tokens"`
+}
+
+// HitRatio returns the share of input tokens read from the prompt cache; false when there is no input
+func (t CacheUsageTotals) HitRatio() (float64, bool) {
+	if t.InputTokens <= 0 {
+		return 0, false
+	}
+	return float64(t.CacheReadTokens) / float64(t.InputTokens), true
+}
+
+func (t *CacheUsageTotals) add(other CacheUsageTotals) {
+	t.Requests += other.Requests
+	t.InputTokens += other.InputTokens
+	t.CacheReadTokens += other.CacheReadTokens
+	t.CacheWriteTokens += other.CacheWriteTokens
+	t.UncachedTokens += other.UncachedTokens
+	t.OutputTokens += other.OutputTokens
+}
+
+// CacheUsageQuery filters a cache usage report; empty AuthID and SessionID match everything
+type CacheUsageQuery struct {
+	Since, Until time.Time
+	AuthID       string
+	// SessionID filters sessions to an exact recorded ID, or to "<provider>:<id>" for a bare ID
+	// that no session has exactly
+	SessionID string
+}
+
+// CacheUsageReport is prompt cache usage for credentials and client sessions
+type CacheUsageReport struct {
+	// Since and Until are the hour-aligned bounds actually reported: totals are kept per hour,
+	// so a query covers every hour it overlaps, ending at the end of Until's hour
+	Since, Until time.Time
+	// Persisted reports whether totals survive restarts, which needs the quota-aware chat affinity profile
+	Persisted   bool
+	Retention   time.Duration
+	Totals      CacheUsageTotals
+	Credentials []CacheUsageCredential
+	Sessions    []CacheUsageSession
+}
+
+// CacheUsageCredential is one credential's prompt cache usage in the queried range
+type CacheUsageCredential struct {
+	AuthID    string
+	AuthIndex string
+	Provider  string
+	Email     string
+	PlanType  string
+	Totals    CacheUsageTotals
+	// Hours holds hourly totals in ascending order, omitting hours without requests
+	Hours []CacheUsageHour
+}
+
+// CacheUsageHour is the totals for requests started in the hour beginning at Start
+type CacheUsageHour struct {
+	Start  time.Time
+	Totals CacheUsageTotals
+}
+
+// CacheUsageSession is one client session's prompt cache usage since it was first seen
+type CacheUsageSession struct {
+	SessionID       string
+	ParentSessionID string
+	AuthID          string
+	Provider        string
+	Model           string
+	FirstSeen       time.Time
+	LastSeen        time.Time
+	Totals          CacheUsageTotals
+	// LastRequest is the latest request alone, showing whether the cache is warm right now
+	LastRequest CacheUsageTotals
+}
+
+type cacheUsageHourKey struct {
+	AuthID   string `json:"auth_id"`
+	Provider string `json:"provider"`
+	Hour     int64  `json:"t"`
+}
+
+type cacheUsageSession struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id,omitempty"`
+	AuthID   string `json:"auth_id"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	// First and Last are request start times in unix milliseconds, so requests started within
+	// one second still order correctly
+	First       int64            `json:"first_ms"`
+	Last        int64            `json:"last_ms"`
+	Totals      CacheUsageTotals `json:"totals"`
+	LastRequest CacheUsageTotals `json:"last_request"`
+}
+
+type cacheUsageHourRecord struct {
+	cacheUsageHourKey
+	Totals CacheUsageTotals `json:"totals"`
+}
+
+type cacheUsageSnapshot struct {
+	Version  int                    `json:"version"`
+	Hours    []cacheUsageHourRecord `json:"hours"`
+	Sessions []*cacheUsageSession   `json:"sessions"`
+}
+
+// cacheUsage aggregates prompt cache outcomes from usage records by credential hour and session
+type cacheUsage struct {
+	now func() time.Time
+	// saveMu serializes snapshot writes, which share one temp file
+	saveMu sync.Mutex
+
+	mu        sync.Mutex
+	hours     map[cacheUsageHourKey]*CacheUsageTotals
+	sessions  map[string]*cacheUsageSession
+	path      string
+	lastSave  time.Time
+	lastPrune time.Time
+	saving    bool
+	dirty     bool
+}
+
+func newCacheUsage(now func() time.Time) *cacheUsage {
+	return &cacheUsage{now: now, hours: map[cacheUsageHourKey]*CacheUsageTotals{}, sessions: map[string]*cacheUsageSession{}}
+}
+
+// persistTo loads the snapshot in dir and saves later changes there
+func (c *cacheUsage) persistTo(dir string) {
+	path := filepath.Join(dir, affinity.CacheUsageFileName)
+	var snapshot cacheUsageSnapshot
+	data, errRead := os.ReadFile(path)
+	if errRead == nil {
+		if errDecode := json.Unmarshal(data, &snapshot); errDecode != nil {
+			log.WithError(errDecode).Warn("cache usage: ignoring unreadable snapshot")
+			snapshot = cacheUsageSnapshot{}
+		}
+	} else if !os.IsNotExist(errRead) {
+		log.WithError(errRead).Warn("cache usage: failed to read snapshot")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.path = path
+	// readings taken before the snapshot loaded are newer and add to it
+	for _, h := range snapshot.Hours {
+		totals := c.hours[h.cacheUsageHourKey]
+		if totals == nil {
+			totals = &CacheUsageTotals{}
+			c.hours[h.cacheUsageHourKey] = totals
+		}
+		totals.add(h.Totals)
+	}
+	for _, s := range snapshot.Sessions {
+		if s == nil || s.ID == "" {
+			continue
+		}
+		if current := c.sessions[s.ID]; current != nil {
+			current.merge(s)
+		} else {
+			c.sessions[s.ID] = s
+		}
+	}
+	c.pruneLocked(c.now())
+}
+
+// merge folds another view of the same session into s
+func (s *cacheUsageSession) merge(other *cacheUsageSession) {
+	s.Totals.add(other.Totals)
+	s.First = min(s.First, other.First)
+	if other.Last > s.Last {
+		s.ParentID, s.AuthID, s.Provider, s.Model = other.ParentID, other.AuthID, other.Provider, other.Model
+		s.Last, s.LastRequest = other.Last, other.LastRequest
+	}
+}
+
+// record adds one finished request; failed requests and records without complete canonical
+// accounting are skipped, since provider-native token fields disagree on what input includes
+func (c *cacheUsage) record(r usage.Record) {
+	b := r.Detail.TokenBreakdown
+	if c == nil || r.Failed || r.AuthID == "" || !b.Valid() || b.Quality != usage.TokenAccountingQualityComplete || b.Input.TotalTokens <= 0 {
+		return
+	}
+	at := r.RequestedAt
+	if at.IsZero() {
+		at = c.now()
+	}
+	request := CacheUsageTotals{
+		Requests:         1,
+		InputTokens:      b.Input.TotalTokens,
+		CacheReadTokens:  b.Input.CacheReadTokens,
+		CacheWriteTokens: b.Input.CacheWriteTokens,
+		UncachedTokens:   b.Input.UncachedTokens,
+		OutputTokens:     b.Output.TotalTokens,
+	}
+
+	c.mu.Lock()
+	key := cacheUsageHourKey{AuthID: r.AuthID, Provider: r.Provider, Hour: at.Truncate(time.Hour).Unix()}
+	totals := c.hours[key]
+	if totals == nil {
+		totals = &CacheUsageTotals{}
+		c.hours[key] = totals
+	}
+	totals.add(request)
+	if id := strings.TrimSpace(r.SessionID); id != "" {
+		s := c.sessions[id]
+		if s == nil {
+			s = &cacheUsageSession{ID: id, First: at.UnixMilli(), Last: at.UnixMilli()}
+			c.sessions[id] = s
+			c.capSessionsLocked()
+		}
+		s.First = min(s.First, at.UnixMilli())
+		s.Totals.add(request)
+		// requests can finish out of order; the latest started one names the session's credential,
+		// which changes on failover, and its cache outcome
+		if at.UnixMilli() >= s.Last {
+			s.ParentID, s.AuthID, s.Provider, s.Model = strings.TrimSpace(r.ParentSessionID), r.AuthID, r.Provider, r.Model
+			s.Last, s.LastRequest = at.UnixMilli(), request
+		}
+	}
+	if now := c.now(); now.Sub(c.lastPrune) >= cacheUsagePruneInterval {
+		c.pruneLocked(now)
+		c.lastPrune = now
+	}
+	c.dirty = true
+	save := c.path != "" && !c.saving && c.now().Sub(c.lastSave) >= cacheUsageSaveInterval
+	if save {
+		c.saving = true
+	}
+	c.mu.Unlock()
+
+	if save {
+		go c.save()
+	}
+}
+
+// save writes the snapshot when it changed since the last write
+func (c *cacheUsage) save() {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+	c.saveLocked(false)
+}
+
+// close writes the final snapshot and stops persisting in one step, before the state directory
+// is released; records arriving later stay in memory only
+func (c *cacheUsage) close() {
+	if c == nil {
+		return
+	}
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+	c.saveLocked(true)
+}
+
+// saveLocked runs with saveMu held, since writes share one temp file
+func (c *cacheUsage) saveLocked(final bool) {
+	c.mu.Lock()
+	path := c.path
+	if final {
+		c.path = ""
+	}
+	if path == "" || !c.dirty {
+		c.saving = false
+		c.mu.Unlock()
+		return
+	}
+	now := c.now()
+	c.pruneLocked(now)
+	snapshot := cacheUsageSnapshot{Version: 1}
+	for key, totals := range c.hours {
+		snapshot.Hours = append(snapshot.Hours, cacheUsageHourRecord{cacheUsageHourKey: key, Totals: *totals})
+	}
+	for _, s := range c.sessions {
+		copied := *s
+		snapshot.Sessions = append(snapshot.Sessions, &copied)
+	}
+	c.dirty = false
+	c.lastSave = now
+	c.mu.Unlock()
+
+	errWrite := writeCacheUsageSnapshot(path, snapshot)
+
+	c.mu.Lock()
+	if errWrite != nil {
+		// keep the changes pending so the next save retries them
+		c.dirty = true
+		log.WithError(errWrite).Warn("cache usage: failed to save snapshot")
+	}
+	c.saving = false
+	c.mu.Unlock()
+}
+
+func writeCacheUsageSnapshot(path string, snapshot cacheUsageSnapshot) error {
+	data, errEncode := json.Marshal(snapshot)
+	if errEncode != nil {
+		return errEncode
+	}
+	tmp := filepath.Join(filepath.Dir(path), affinity.CacheUsageTempFileName)
+	if errWrite := os.WriteFile(tmp, data, 0o600); errWrite != nil {
+		return errWrite
+	}
+	return os.Rename(tmp, path)
+}
+
+// capSessionsLocked drops the least recently active session once a new one exceeds the cap
+func (c *cacheUsage) capSessionsLocked() {
+	if len(c.sessions) <= cacheUsageMaxSessions {
+		return
+	}
+	var oldest *cacheUsageSession
+	for _, s := range c.sessions {
+		if oldest == nil || s.Last < oldest.Last {
+			oldest = s
+		}
+	}
+	delete(c.sessions, oldest.ID)
+}
+
+func (c *cacheUsage) pruneLocked(now time.Time) {
+	oldestHour := now.Add(-CacheUsageRetention).Truncate(time.Hour).Unix()
+	for key := range c.hours {
+		if key.Hour < oldestHour {
+			delete(c.hours, key)
+		}
+	}
+	idleBefore := now.Add(-cacheUsageSessionIdle).UnixMilli()
+	for id, s := range c.sessions {
+		if s.Last < idleBefore {
+			delete(c.sessions, id)
+		}
+	}
+	if len(c.sessions) <= cacheUsageMaxSessions {
+		return
+	}
+	ordered := make([]*cacheUsageSession, 0, len(c.sessions))
+	for _, s := range c.sessions {
+		ordered = append(ordered, s)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Last < ordered[j].Last })
+	for _, s := range ordered[:len(ordered)-cacheUsageMaxSessions] {
+		delete(c.sessions, s.ID)
+	}
+}
+
+// filterCacheUsageSessions keeps sessions recorded under exactly id; a bare id without a
+// provider prefix also matches "<provider>:<id>" when no session has exactly that id, and every
+// such match is returned so the caller sees which providers share it
+func filterCacheUsageSessions(sessions []CacheUsageSession, id string) []CacheUsageSession {
+	if id == "" {
+		return sessions
+	}
+	var exact, prefixed []CacheUsageSession
+	for _, s := range sessions {
+		if s.SessionID == id {
+			exact = append(exact, s)
+		} else if _, rest, ok := strings.Cut(s.SessionID, ":"); ok && rest == id && !strings.Contains(id, ":") {
+			prefixed = append(prefixed, s)
+		}
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	if prefixed == nil {
+		return []CacheUsageSession{}
+	}
+	return prefixed
+}
+
+// CacheUsage reports prompt cache usage by credential and session for requests in [Since, Until]
+func (m *Manager) CacheUsage(q CacheUsageQuery) CacheUsageReport {
+	report := CacheUsageReport{Retention: CacheUsageRetention, Credentials: []CacheUsageCredential{}, Sessions: []CacheUsageSession{}}
+	if m == nil || m.cacheUsage == nil {
+		return report
+	}
+	c := m.cacheUsage
+	report.Since, report.Until = q.Since.Truncate(time.Hour), q.Until.Truncate(time.Hour).Add(time.Hour)
+	sinceHour, until := report.Since.Unix(), report.Until.Unix()
+
+	// copy under the cache usage lock, then label credentials under the manager lock
+	c.mu.Lock()
+	report.Persisted = c.path != ""
+	byAuth := map[string]*CacheUsageCredential{}
+	for key, totals := range c.hours {
+		if key.Hour < sinceHour || key.Hour >= until || (q.AuthID != "" && key.AuthID != q.AuthID) {
+			continue
+		}
+		credential := byAuth[key.AuthID]
+		if credential == nil {
+			credential = &CacheUsageCredential{AuthID: key.AuthID, Provider: key.Provider}
+			byAuth[key.AuthID] = credential
+		}
+		credential.Totals.add(*totals)
+		credential.Hours = append(credential.Hours, CacheUsageHour{Start: time.Unix(key.Hour, 0), Totals: *totals})
+	}
+	for _, s := range c.sessions {
+		if s.Last < report.Since.UnixMilli() || s.First >= report.Until.UnixMilli() || (q.AuthID != "" && s.AuthID != q.AuthID) {
+			continue
+		}
+		report.Sessions = append(report.Sessions, CacheUsageSession{
+			SessionID: s.ID, ParentSessionID: s.ParentID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model,
+			FirstSeen: time.UnixMilli(s.First), LastSeen: time.UnixMilli(s.Last), Totals: s.Totals, LastRequest: s.LastRequest,
+		})
+	}
+	c.mu.Unlock()
+	report.Sessions = filterCacheUsageSessions(report.Sessions, q.SessionID)
+
+	for _, credential := range byAuth {
+		if a, ok := m.GetByID(credential.AuthID); ok {
+			credential.AuthIndex = a.EnsureIndex()
+			credential.Email = metadataString(a.Metadata, "email")
+			credential.PlanType = strings.TrimSpace(a.Attributes["plan_type"])
+			if credential.PlanType == "" {
+				credential.PlanType = metadataString(a.Metadata, "plan_type")
+			}
+		}
+		sort.Slice(credential.Hours, func(i, j int) bool { return credential.Hours[i].Start.Before(credential.Hours[j].Start) })
+		report.Totals.add(credential.Totals)
+		report.Credentials = append(report.Credentials, *credential)
+	}
+	sort.Slice(report.Credentials, func(i, j int) bool { return report.Credentials[i].AuthID < report.Credentials[j].AuthID })
+	sort.Slice(report.Sessions, func(i, j int) bool { return report.Sessions[i].LastSeen.After(report.Sessions[j].LastSeen) })
+	return report
+}
+
+// CacheUsagePlugin returns the usage plugin that feeds CacheUsage
+func (m *Manager) CacheUsagePlugin() usage.Plugin { return cacheUsagePlugin{m} }
+
+type cacheUsagePlugin struct{ m *Manager }
+
+func (p cacheUsagePlugin) HandleUsage(_ context.Context, record usage.Record) {
+	if p.m != nil {
+		p.m.cacheUsage.record(record)
+	}
+}

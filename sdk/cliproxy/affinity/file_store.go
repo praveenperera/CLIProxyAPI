@@ -29,11 +29,22 @@ const QuotaHistoryFileName = "quota-history.jsonl"
 // QuotaHistoryTempFileName is the compaction temp file renamed over QuotaHistoryFileName
 const QuotaHistoryTempFileName = QuotaHistoryFileName + ".tmp"
 
-// maxDirectoryEntries allows full binding capacity plus lock, key, one pending write, and the two history files
-const maxDirectoryEntries = 65536 + 3 + 2
+// CacheUsageFileName is the host-owned prompt cache usage snapshot kept beside bindings
+const CacheUsageFileName = "cache-usage.json"
+
+// CacheUsageTempFileName is the temp file renamed over CacheUsageFileName
+const CacheUsageTempFileName = CacheUsageFileName + ".tmp"
+
+// maxDirectoryEntries allows full binding capacity plus lock, key, one pending write, and the
+// history and cache usage files with their temp files
+const maxDirectoryEntries = 65536 + 3 + 4
 
 func hostOwnedEntry(name string) bool {
-	return name == QuotaHistoryFileName || name == QuotaHistoryTempFileName
+	switch name {
+	case QuotaHistoryFileName, QuotaHistoryTempFileName, CacheUsageFileName, CacheUsageTempFileName:
+		return true
+	}
+	return false
 }
 
 type diskRecord struct {

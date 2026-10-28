@@ -99,6 +99,7 @@ retain the corresponding business operation's fields.
 | `/observability/logs/requests/<id>` | GET | Get a request log. |
 | `/observability/usage/api-keys` | GET | Get API-key usage. |
 | `/observability/usage/queue` | GET | Get queued usage events. |
+| `/observability/usage/cache` | GET | Get prompt cache hit ratios by credential, hour, and client session. See [Prompt cache usage](#prompt-cache-usage). |
 | `/credentials` | GET, POST, DELETE | List, upload, or delete credential files. |
 | `/credentials/models` | GET | Get credential models. |
 | `/credentials/download` | GET | Download a credential file. |
@@ -117,6 +118,35 @@ retain the corresponding business operation's fields.
 | `/plugins/store` | GET | List the plugin store. |
 | `/plugins/store/<id>/install` | POST | Install or update a plugin. |
 | `/plugins/<id>/quota` | GET, POST, DELETE | Read, fetch, or reset plugin quota. |
+
+### Prompt cache usage
+
+`GET /v8/management/observability/usage/cache` reports how much of each request's input came from the provider's prompt cache. Agents can use it to check whether their session is getting cache hits.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `since`, `until` | Unix seconds; the default range is the last 24 hours. Totals are kept per hour, so the range widens to whole hours and the response's `since` and `until` give the bounds actually reported. |
+| `auth_id` | Only this credential, such as `claude-a93f2c35-user@example.com.json`. |
+| `session_id` | Only this client session in `sessions`. An exact match wins. Otherwise a bare ID such as a Claude Code session UUID matches `<provider>:<id>`, and every provider with that ID is listed. |
+
+```bash
+curl -s -H "Authorization: Bearer $MANAGEMENT_KEY" \
+  "http://<host>:8317/v8/management/observability/usage/cache?session_id=$CLAUDE_CODE_SESSION_ID"
+```
+
+The response has `totals`, `credentials` (each with `totals` and hourly `hours` points keyed by the hour's start `t`), and `sessions` (most recent first, each with `totals` and the latest request alone in `last_request`). Every totals object holds:
+
+| Field | Meaning |
+| --- | --- |
+| `requests` | Successful requests counted. |
+| `input_tokens` | All input tokens; equals the three buckets below added together. |
+| `cache_read_tokens` | Input read from the prompt cache. |
+| `cache_write_tokens` | Input written to the prompt cache. Codex rarely reports writes. |
+| `uncached_tokens` | Input neither read from nor written to the cache. |
+| `output_tokens` | Output tokens. |
+| `hit_ratio` | `cache_read_tokens / input_tokens` from 0 to 1, or `null` without input. |
+
+A session's `last_request.hit_ratio` near 0 with a large `cache_write_tokens` is a cold start, which happens on a session's first turn, after the cache expires, and after a failover to another account. Failed requests and responses without complete token accounting are not counted. Queued usage is delivered before shutdown saves the snapshot. Hourly totals are kept for 30 days and sessions for 7 days after their last request. They are saved beside the quota history and survive restarts when `routing.quota-aware-chat-affinity` is configured (`persisted: true`); otherwise they are kept in memory only.
 
 ## OAuth
 

@@ -602,6 +602,8 @@ type Manager struct {
 	once     sync.Once
 	stopOnce sync.Once
 	cancel   context.CancelFunc
+	// done closes when the dispatcher has drained the queue after Stop; nil before Start
+	done chan struct{}
 
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -631,7 +633,14 @@ func (m *Manager) Start(ctx context.Context) {
 		}
 		var workerCtx context.Context
 		workerCtx, m.cancel = context.WithCancel(ctx)
-		go m.run(workerCtx)
+		m.mu.Lock()
+		m.done = make(chan struct{})
+		done := m.done
+		m.mu.Unlock()
+		go func() {
+			defer close(done)
+			m.run(workerCtx)
+		}()
 	})
 }
 
@@ -649,6 +658,28 @@ func (m *Manager) Stop() {
 		m.mu.Unlock()
 		m.cond.Broadcast()
 	})
+}
+
+// Wait blocks until the dispatcher has delivered every queued record after Stop, or ctx ends
+func (m *Manager) Wait(ctx context.Context) error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	done := m.done
+	m.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Register appends a plugin to the delivery list.
@@ -801,3 +832,6 @@ func StartDefault(ctx context.Context) { DefaultManager().Start(ctx) }
 
 // StopDefault stops the default manager's dispatcher.
 func StopDefault() { DefaultManager().Stop() }
+
+// WaitDefault waits for the default manager to deliver queued records after StopDefault
+func WaitDefault(ctx context.Context) error { return DefaultManager().Wait(ctx) }

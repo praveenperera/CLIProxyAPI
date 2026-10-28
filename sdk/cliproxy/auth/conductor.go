@@ -171,6 +171,8 @@ type resultPolicyHolder struct {
 type Manager struct {
 	affinityMu      sync.Mutex
 	affinityRuntime *affinityRuntime
+	// cacheUsage aggregates prompt cache outcomes per credential and session
+	cacheUsage *cacheUsage
 
 	store                     Store
 	cooldownStore             CooldownStateStore
@@ -270,6 +272,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		homeSessionSelections: make(map[string]map[homeSessionSelectionKey]*HomeDispatchSelection),
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
+		cacheUsage:            newCacheUsage(time.Now),
 	}
 	manager.bindSelectorQuota(selector)
 	// atomic.Value requires non-nil initial value.

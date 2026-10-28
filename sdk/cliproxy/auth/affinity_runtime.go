@@ -81,6 +81,7 @@ func (m *Manager) ConfigureQuotaAffinity(cfg *internalconfig.Config) error {
 	runtime.store = store
 	// history persistence is best effort and never fails profile startup
 	runtime.history = openQuotaHistory(settings.StateDir, func() time.Time { return runtime.now() })
+	m.cacheUsage.persistTo(settings.StateDir)
 	m.affinityRuntime = runtime
 	return nil
 }
@@ -114,6 +115,7 @@ func (m *Manager) CloseQuotaAffinity() error {
 	}
 	// drain history writes before the store releases the directory lock
 	m.affinityRuntime.history.close()
+	m.cacheUsage.close()
 	return m.affinityRuntime.store.Close()
 }
 

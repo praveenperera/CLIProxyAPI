@@ -63,6 +63,9 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 	s.startModelCatalogUpdaters(ctx)
 
+	if s.coreManager != nil {
+		usage.RegisterNamedPlugin("cache-usage", s.coreManager.CacheUsagePlugin())
+	}
 	usage.StartDefault(ctx)
 	cfg := s.currentConfig()
 	homeEnabled := cfg != nil && cfg.Home.Enabled
@@ -402,6 +405,10 @@ func (s *Service) Shutdown(ctx context.Context) error {
 		}
 
 		usage.StopDefault()
+		// queued records reach the cache usage plugin before its final snapshot
+		if errWait := usage.WaitDefault(ctx); errWait != nil {
+			log.WithError(errWait).Warn("usage records still queued at shutdown were not delivered")
+		}
 		if s.coreManager != nil {
 			if errClose := s.coreManager.CloseQuotaAffinity(); errClose != nil && shutdownErr == nil {
 				shutdownErr = errClose
