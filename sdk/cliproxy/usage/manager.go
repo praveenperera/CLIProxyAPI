@@ -104,6 +104,9 @@ type Detail struct {
 	CachedTokens        int64
 	CacheReadTokens     int64
 	CacheCreationTokens int64
+	// CacheWrite1hTokens is the part of CacheCreationTokens written to Anthropic's 1-hour
+	// cache, which is billed above the 5-minute rate; zero when the upstream does not say
+	CacheWrite1hTokens  int64
 	TotalTokens         int64
 	TokenBreakdown      TokenBreakdown
 	ResponseServiceTier string

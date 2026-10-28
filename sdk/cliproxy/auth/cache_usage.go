@@ -34,6 +34,10 @@ const cacheUsagePruneInterval = 10 * time.Minute
 // which covers the first request's run time; labels of requests that never finish then go
 const cacheUsageLabelPending = time.Hour
 
+// cacheUsageSnapshotVersion 2 added per-model hours and API-equivalent cost; totals loaded from
+// an older snapshot count as unpriced
+const cacheUsageSnapshotVersion = 2
+
 // CacheUsageTotals counts input tokens by prompt cache outcome; the input buckets are mutually
 // exclusive, so InputTokens = CacheReadTokens + CacheWriteTokens + UncachedTokens
 type CacheUsageTotals struct {
@@ -41,8 +45,16 @@ type CacheUsageTotals struct {
 	InputTokens      int64 `json:"input_tokens"`
 	CacheReadTokens  int64 `json:"cache_read_tokens"`
 	CacheWriteTokens int64 `json:"cache_write_tokens"`
-	UncachedTokens   int64 `json:"uncached_tokens"`
-	OutputTokens     int64 `json:"output_tokens"`
+	// CacheWrite1hTokens is the part of CacheWriteTokens written to the 1-hour cache
+	CacheWrite1hTokens int64 `json:"cache_write_1h_tokens,omitempty"`
+	UncachedTokens     int64 `json:"uncached_tokens"`
+	OutputTokens       int64 `json:"output_tokens"`
+	// CostUSD is the requests' cost at API list prices and NoCacheCostUSD the same requests
+	// with every input token at the base input rate; both leave out UnpricedRequests, whose
+	// model has no known price or which were recorded before cost tracking
+	CostUSD          float64 `json:"cost_usd,omitempty"`
+	NoCacheCostUSD   float64 `json:"no_cache_cost_usd,omitempty"`
+	UnpricedRequests int64   `json:"unpriced_requests,omitempty"`
 }
 
 // HitRatio returns the share of input tokens read from the prompt cache; false when there is no input
@@ -58,8 +70,17 @@ func (t *CacheUsageTotals) add(other CacheUsageTotals) {
 	t.InputTokens += other.InputTokens
 	t.CacheReadTokens += other.CacheReadTokens
 	t.CacheWriteTokens += other.CacheWriteTokens
+	t.CacheWrite1hTokens += other.CacheWrite1hTokens
 	t.UncachedTokens += other.UncachedTokens
 	t.OutputTokens += other.OutputTokens
+	t.CostUSD += other.CostUSD
+	t.NoCacheCostUSD += other.NoCacheCostUSD
+	t.UnpricedRequests += other.UnpricedRequests
+}
+
+// markUnpriced counts every request as unpriced, for totals kept before cost tracking
+func (t *CacheUsageTotals) markUnpriced() {
+	t.UnpricedRequests = t.Requests
 }
 
 // CacheUsageQuery filters a cache usage report; empty AuthID and SessionID match everything
@@ -81,7 +102,17 @@ type CacheUsageReport struct {
 	Retention   time.Duration
 	Totals      CacheUsageTotals
 	Credentials []CacheUsageCredential
-	Sessions    []CacheUsageSession
+	// Models splits the totals by the model that served each request, busiest first
+	Models   []CacheUsageModel
+	Sessions []CacheUsageSession
+}
+
+// CacheUsageModel is one served model's usage in the queried range; Model is empty for
+// requests recorded before usage was kept per model
+type CacheUsageModel struct {
+	Model    string
+	Provider string
+	Totals   CacheUsageTotals
 }
 
 // CacheUsageCredential is one credential's prompt cache usage in the queried range
@@ -123,6 +154,7 @@ type CacheUsageSession struct {
 type cacheUsageHourKey struct {
 	AuthID   string `json:"auth_id"`
 	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
 	Hour     int64  `json:"t"`
 }
 
@@ -199,8 +231,12 @@ func (c *cacheUsage) persistTo(dir string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.path = path
+	legacy := snapshot.Version < cacheUsageSnapshotVersion
 	// readings taken before the snapshot loaded are newer and add to it
 	for _, h := range snapshot.Hours {
+		if legacy {
+			h.Totals.markUnpriced()
+		}
 		totals := c.hours[h.cacheUsageHourKey]
 		if totals == nil {
 			totals = &CacheUsageTotals{}
@@ -211,6 +247,10 @@ func (c *cacheUsage) persistTo(dir string) {
 	for _, s := range snapshot.Sessions {
 		if s == nil || s.ID == "" {
 			continue
+		}
+		if legacy {
+			s.Totals.markUnpriced()
+			s.LastRequest.markUnpriced()
 		}
 		if current := c.sessions[s.ID]; current != nil {
 			current.merge(s)
@@ -274,16 +314,34 @@ func (c *cacheUsage) record(r usage.Record) {
 		at = c.now()
 	}
 	request := CacheUsageTotals{
-		Requests:         1,
-		InputTokens:      b.Input.TotalTokens,
-		CacheReadTokens:  b.Input.CacheReadTokens,
-		CacheWriteTokens: b.Input.CacheWriteTokens,
-		UncachedTokens:   b.Input.UncachedTokens,
-		OutputTokens:     b.Output.TotalTokens,
+		Requests:           1,
+		InputTokens:        b.Input.TotalTokens,
+		CacheReadTokens:    b.Input.CacheReadTokens,
+		CacheWriteTokens:   b.Input.CacheWriteTokens,
+		CacheWrite1hTokens: min(max(r.Detail.CacheWrite1hTokens, 0), b.Input.CacheWriteTokens),
+		UncachedTokens:     b.Input.UncachedTokens,
+		OutputTokens:       b.Output.TotalTokens,
+	}
+	// price the model that actually served the request, which differs from the requested one
+	// after an alias or upstream substitution
+	model := strings.TrimSpace(r.ResponseModel)
+	if model == "" {
+		model = strings.TrimSpace(r.Model)
+	}
+	tier := r.ResponseServiceTier
+	if tier == "" {
+		tier = r.Detail.ResponseServiceTier
+	}
+	if cost, noCache, ok := cacheUsageCost(model, tier, request); ok {
+		request.CostUSD, request.NoCacheCostUSD = cost, noCache
+		// dated snapshots, cloud IDs, and suffixed aliases of one model share its row
+		model = cacheUsagePriceKey(model)
+	} else {
+		request.UnpricedRequests = 1
 	}
 
 	c.mu.Lock()
-	key := cacheUsageHourKey{AuthID: r.AuthID, Provider: r.Provider, Hour: at.Truncate(time.Hour).Unix()}
+	key := cacheUsageHourKey{AuthID: r.AuthID, Provider: r.Provider, Model: model, Hour: at.Truncate(time.Hour).Unix()}
 	totals := c.hours[key]
 	if totals == nil {
 		totals = &CacheUsageTotals{}
@@ -354,7 +412,7 @@ func (c *cacheUsage) saveLocked(final bool) {
 	}
 	now := c.now()
 	c.pruneLocked(now)
-	snapshot := cacheUsageSnapshot{Version: 1}
+	snapshot := cacheUsageSnapshot{Version: cacheUsageSnapshotVersion}
 	for key, totals := range c.hours {
 		snapshot.Hours = append(snapshot.Hours, cacheUsageHourRecord{cacheUsageHourKey: key, Totals: *totals})
 	}
@@ -473,7 +531,7 @@ func filterCacheUsageSessions(sessions []CacheUsageSession, id string) []CacheUs
 
 // CacheUsage reports prompt cache usage by credential and session for requests in [Since, Until]
 func (m *Manager) CacheUsage(q CacheUsageQuery) CacheUsageReport {
-	report := CacheUsageReport{Retention: CacheUsageRetention, Credentials: []CacheUsageCredential{}, Sessions: []CacheUsageSession{}}
+	report := CacheUsageReport{Retention: CacheUsageRetention, Credentials: []CacheUsageCredential{}, Models: []CacheUsageModel{}, Sessions: []CacheUsageSession{}}
 	if m == nil || m.cacheUsage == nil {
 		return report
 	}
@@ -485,6 +543,9 @@ func (m *Manager) CacheUsage(q CacheUsageQuery) CacheUsageReport {
 	c.mu.Lock()
 	report.Persisted = c.path != ""
 	byAuth := map[string]*CacheUsageCredential{}
+	// a credential hour holds one entry per model, merged here into one point
+	byAuthHour := map[cacheUsageHourKey]*CacheUsageTotals{}
+	byModel := map[cacheUsageHourKey]*CacheUsageModel{}
 	for key, totals := range c.hours {
 		if key.Hour < sinceHour || key.Hour >= until || (q.AuthID != "" && key.AuthID != q.AuthID) {
 			continue
@@ -495,7 +556,25 @@ func (m *Manager) CacheUsage(q CacheUsageQuery) CacheUsageReport {
 			byAuth[key.AuthID] = credential
 		}
 		credential.Totals.add(*totals)
+		hourKey := cacheUsageHourKey{AuthID: key.AuthID, Hour: key.Hour}
+		if byAuthHour[hourKey] == nil {
+			byAuthHour[hourKey] = &CacheUsageTotals{}
+		}
+		byAuthHour[hourKey].add(*totals)
+		modelKey := cacheUsageHourKey{Provider: key.Provider, Model: key.Model}
+		model := byModel[modelKey]
+		if model == nil {
+			model = &CacheUsageModel{Model: key.Model, Provider: key.Provider}
+			byModel[modelKey] = model
+		}
+		model.Totals.add(*totals)
+	}
+	for key, totals := range byAuthHour {
+		credential := byAuth[key.AuthID]
 		credential.Hours = append(credential.Hours, CacheUsageHour{Start: time.Unix(key.Hour, 0), Totals: *totals})
+	}
+	for _, model := range byModel {
+		report.Models = append(report.Models, *model)
 	}
 	for _, s := range c.sessions {
 		if s.Last < report.Since.UnixMilli() || s.First >= report.Until.UnixMilli() || (q.AuthID != "" && s.AuthID != q.AuthID) {
@@ -527,6 +606,15 @@ func (m *Manager) CacheUsage(q CacheUsageQuery) CacheUsageReport {
 		report.Credentials = append(report.Credentials, *credential)
 	}
 	sort.Slice(report.Credentials, func(i, j int) bool { return report.Credentials[i].AuthID < report.Credentials[j].AuthID })
+	sort.Slice(report.Models, func(i, j int) bool {
+		if report.Models[i].Totals.Requests != report.Models[j].Totals.Requests {
+			return report.Models[i].Totals.Requests > report.Models[j].Totals.Requests
+		}
+		if report.Models[i].Model != report.Models[j].Model {
+			return report.Models[i].Model < report.Models[j].Model
+		}
+		return report.Models[i].Provider < report.Models[j].Provider
+	})
 	sort.Slice(report.Sessions, func(i, j int) bool { return report.Sessions[i].LastSeen.After(report.Sessions[j].LastSeen) })
 	return report
 }

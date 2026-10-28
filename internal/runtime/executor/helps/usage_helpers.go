@@ -1258,6 +1258,7 @@ func parseClaudeUsageNode(usageNode gjson.Result) usage.Detail {
 		CachedTokens:        cacheReadTokens,
 		CacheReadTokens:     cacheReadTokens,
 		CacheCreationTokens: cacheCreationTokens,
+		CacheWrite1hTokens:  usageNode.Get("cache_creation.ephemeral_1h_input_tokens").Int(),
 	}
 	// Anthropic reports the speed a response was served and billed at in
 	// usage.speed ("fast" or "standard"): fast mode costs more, and a

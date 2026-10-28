@@ -20,7 +20,14 @@ type cacheUsageResponse struct {
 	RetentionSeconds int64                       `json:"retention_seconds"`
 	Totals           cacheUsageTotalsEntry       `json:"totals"`
 	Credentials      []cacheUsageCredentialEntry `json:"credentials"`
+	Models           []cacheUsageModelEntry      `json:"models"`
 	Sessions         []cacheUsageSessionEntry    `json:"sessions"`
+}
+
+type cacheUsageModelEntry struct {
+	Model    string                `json:"model"`
+	Provider string                `json:"provider"`
+	Totals   cacheUsageTotalsEntry `json:"totals"`
 }
 
 type cacheUsageTotalsEntry struct {
@@ -60,6 +67,9 @@ type cacheUsageSessionEntry struct {
 
 func cacheUsageTotals(t coreauth.CacheUsageTotals) cacheUsageTotalsEntry {
 	entry := cacheUsageTotalsEntry{CacheUsageTotals: t}
+	// a millionth of a dollar is below any cost worth showing and drops float noise
+	entry.CostUSD = math.Round(t.CostUSD*1e6) / 1e6
+	entry.NoCacheCostUSD = math.Round(t.NoCacheCostUSD*1e6) / 1e6
 	if ratio, ok := t.HitRatio(); ok {
 		// four decimals keep the ratio readable without float noise
 		rounded := math.Round(ratio*10000) / 10000
@@ -91,6 +101,7 @@ func (h *Handler) GetCacheUsage(c *gin.Context) {
 		RetentionSeconds: int64(coreauth.CacheUsageRetention / time.Second),
 		Totals:           cacheUsageTotals(coreauth.CacheUsageTotals{}),
 		Credentials:      []cacheUsageCredentialEntry{},
+		Models:           []cacheUsageModelEntry{},
 		Sessions:         []cacheUsageSessionEntry{},
 	}
 	if h.authManager == nil {
@@ -112,6 +123,9 @@ func (h *Handler) GetCacheUsage(c *gin.Context) {
 			entry.Hours = append(entry.Hours, cacheUsageHourEntry{T: hour.Start.Unix(), cacheUsageTotalsEntry: cacheUsageTotals(hour.Totals)})
 		}
 		resp.Credentials = append(resp.Credentials, entry)
+	}
+	for _, model := range report.Models {
+		resp.Models = append(resp.Models, cacheUsageModelEntry{Model: model.Model, Provider: model.Provider, Totals: cacheUsageTotals(model.Totals)})
 	}
 	for _, s := range report.Sessions {
 		resp.Sessions = append(resp.Sessions, cacheUsageSessionEntry{SessionID: s.SessionID, ParentSessionID: s.ParentSessionID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model, Title: s.Title, Project: s.Project, FirstSeen: s.FirstSeen.Unix(), LastSeen: s.LastSeen.Unix(), Totals: cacheUsageTotals(s.Totals), LastRequest: cacheUsageTotals(s.LastRequest)})
