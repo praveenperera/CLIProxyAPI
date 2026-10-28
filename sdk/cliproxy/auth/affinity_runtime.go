@@ -117,6 +117,15 @@ func (m *Manager) CloseQuotaAffinity() error {
 	return m.affinityRuntime.store.Close()
 }
 
+// strictFallbackSelector returns the built-in selector that places strict chats without quota
+// data; session affinity is skipped because a strict chat keeps its own durable binding
+func strictFallbackSelector(selector Selector) (Selector, bool) {
+	if affinitySelector, ok := selector.(*SessionAffinitySelector); ok && affinitySelector != nil {
+		selector = affinitySelector.fallback
+	}
+	return selector, isBuiltInSelector(selector)
+}
+
 // QuotaAffinityNamespace returns the enabled deployment namespace, or empty
 func (m *Manager) QuotaAffinityNamespace() string {
 	if m == nil {
@@ -307,8 +316,8 @@ func (m *Manager) coldAffinityAuth(ctx context.Context, providers []string, mode
 		return affinity.CredentialRef{}, affinity.NewError(affinity.RouteUnsupported, time.Time{})
 	}
 	sort.Slice(fallback, func(i, j int) bool { return fallback[i].ID < fallback[j].ID })
-	selector := m.Selector()
-	if !isBuiltInSelector(selector) {
+	selector, ok := strictFallbackSelector(m.Selector())
+	if !ok {
 		return affinity.CredentialRef{}, affinity.NewError(affinity.RouteUnsupported, time.Time{})
 	}
 	selected, err := selector.Pick(ctx, "mixed", model, opts, fallback)
@@ -332,7 +341,7 @@ func (m *Manager) beginAffinity(ctx context.Context, providers []string, req exe
 	if count && opts.Affinity.Intent() != affinity.ContinueIntent {
 		return failure(affinity.NewError(affinity.BindingMissing, time.Time{}))
 	}
-	if m.HomeEnabled() || m.hasPluginScheduler() || !isBuiltInSelector(m.Selector()) {
+	if _, ok := strictFallbackSelector(m.Selector()); m.HomeEnabled() || m.hasPluginScheduler() || !ok {
 		return failure(affinity.NewError(affinity.RouteUnsupported, time.Time{}))
 	}
 	m.affinityMu.Lock()

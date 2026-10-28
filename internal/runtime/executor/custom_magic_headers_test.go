@@ -804,7 +804,7 @@ func TestCustomMagicHeaders_CPASessionID_XAI(t *testing.T) {
 	}
 }
 
-func TestCustomMagicHeaders_CPASessionID_SessionAffinityOnAndOff(t *testing.T) {
+func TestCustomMagicHeaders_CPASessionID_SessionAffinity(t *testing.T) {
 	var gotHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
@@ -813,53 +813,45 @@ func TestCustomMagicHeaders_CPASessionID_SessionAffinityOnAndOff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	for _, sessionAffinity := range []bool{true, false} {
-		t.Run(map[bool]string{true: "SessionAffinity=true", false: "SessionAffinity=false"}[sessionAffinity], func(t *testing.T) {
-			gotHeaders = nil
-			cfg := &config.Config{
-				Routing: config.RoutingConfig{
-					SessionAffinity: sessionAffinity,
-				},
-				OpenAICompatibility: []config.OpenAICompatibility{{
-					Name: "compat",
-					Headers: map[string]string{
-						"X-CPA-Session": "$CPA-SESSION-ID",
-					},
-				}},
-			}
+	cfg := &config.Config{
+		OpenAICompatibility: []config.OpenAICompatibility{{
+			Name: "compat",
+			Headers: map[string]string{
+				"X-CPA-Session": "$CPA-SESSION-ID",
+			},
+		}},
+	}
 
-			executor := NewOpenAICompatExecutor("openai-compatibility", cfg)
-			auth := &cliproxyauth.Auth{
-				ID:       "auth-compat-1",
-				Provider: "openai-compatibility",
-				Attributes: map[string]string{
-					"base_url":             server.URL,
-					"api_key":              "key-1",
-					"header:X-CPA-Session": "$CPA-SESSION-ID",
-				},
-			}
+	executor := NewOpenAICompatExecutor("openai-compatibility", cfg)
+	auth := &cliproxyauth.Auth{
+		ID:       "auth-compat-1",
+		Provider: "openai-compatibility",
+		Attributes: map[string]string{
+			"base_url":             server.URL,
+			"api_key":              "key-1",
+			"header:X-CPA-Session": "$CPA-SESSION-ID",
+		},
+	}
 
-			req := cliproxyexecutor.Request{
-				Model:   "gpt-4o",
-				Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
-			}
-			opts := cliproxyexecutor.Options{
-				SourceFormat: sdktranslator.FormatOpenAI,
-				Headers: http.Header{
-					"X-Session-ID": []string{"aff-test-sess-99"},
-				},
-			}
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-4o",
+		Payload: []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
+	}
+	opts := cliproxyexecutor.Options{
+		SourceFormat: sdktranslator.FormatOpenAI,
+		Headers: http.Header{
+			"X-Session-ID": []string{"aff-test-sess-99"},
+		},
+	}
 
-			_, err := executor.Execute(context.Background(), auth, req, opts)
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
+	_, err := executor.Execute(context.Background(), auth, req, opts)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
 
-			wantSession := "header:aff-test-sess-99"
-			if got := gotHeaders.Get("X-CPA-Session"); got != wantSession {
-				t.Errorf("X-CPA-Session = %q, want %q (sessionAffinity=%v)", got, wantSession, sessionAffinity)
-			}
-		})
+	wantSession := "header:aff-test-sess-99"
+	if got := gotHeaders.Get("X-CPA-Session"); got != wantSession {
+		t.Errorf("X-CPA-Session = %q, want %q ", got, wantSession)
 	}
 }
 

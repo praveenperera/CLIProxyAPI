@@ -80,5 +80,7 @@ func NormalizeV8ConfigAliases(root *yaml.Node) error {
 		}
 		deleteYAMLPath(root, alias.old)
 	}
+	// session-sticky routing is always on now; older files still carry the switch
+	deleteYAMLPath(root, "routing.session-affinity")
 	return nil
 }

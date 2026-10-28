@@ -56,10 +56,11 @@ type configCommit struct {
 
 type routingRuntimeState struct {
 	strategy                 string
-	sessionAffinity          bool
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
 	sessionAffinityRebindOn  string
+	// quotaPolling reports whether the quota-aware chat affinity profile observes quota
+	quotaPolling bool
 }
 
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
@@ -78,8 +79,10 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
+	case "weekly-reset-first", "weeklyresetfirst", "wrf":
+		state.strategy = "weekly-reset-first"
 	}
-	state.sessionAffinity = cfg.Routing.SessionAffinity
+	state.quotaPolling = cfg.Routing.QuotaAwareChatAffinity != nil
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
 		if parsed, errParse := time.ParseDuration(ttl); errParse == nil && parsed > 0 {
 			if parsed < time.Second {
@@ -88,33 +91,41 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 			state.sessionAffinityTTL = parsed
 		}
 	}
-	if state.sessionAffinity && cfg.Routing.SessionAffinitySubagents != nil {
+	if cfg.Routing.SessionAffinitySubagents != nil {
 		state.sessionAffinitySubagents = *cfg.Routing.SessionAffinitySubagents
 	}
-	if state.sessionAffinity && strings.EqualFold(strings.TrimSpace(cfg.Routing.SessionAffinityRebindOn), coreauth.SessionAffinityRebindOnQuota) {
+	if strings.EqualFold(strings.TrimSpace(cfg.Routing.SessionAffinityRebindOn), coreauth.SessionAffinityRebindOnQuota) {
 		state.sessionAffinityRebindOn = coreauth.SessionAffinityRebindOnQuota
 	}
 	return state
 }
 
 func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
+	// sessions always stay on their credential: providers do not share prompt caches across
+	// accounts, so the strategy only places new sessions and failover
+	subagents := state.sessionAffinitySubagents
+	return coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
+		Fallback:         newStrategySelector(state),
+		TTL:              state.sessionAffinityTTL,
+		SubagentAffinity: &subagents,
+		RebindOn:         state.sessionAffinityRebindOn,
+	})
+}
+
+func newStrategySelector(state routingRuntimeState) coreauth.Selector {
 	var selector coreauth.Selector
 	switch state.strategy {
 	case "weighted-round-robin":
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
+	case "weekly-reset-first":
+		selector = &coreauth.WeeklyResetFirstSelector{}
+		if !state.quotaPolling {
+			log.Warn("routing strategy weekly-reset-first has no quota data without routing.quota-aware-chat-affinity and behaves like fill-first")
+		}
 	default:
 		selector = &coreauth.RoundRobinSelector{}
-	}
-	if state.sessionAffinity {
-		subagents := state.sessionAffinitySubagents
-		selector = coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
-			Fallback:         selector,
-			TTL:              state.sessionAffinityTTL,
-			SubagentAffinity: &subagents,
-			RebindOn:         state.sessionAffinityRebindOn,
-		})
 	}
 	return selector
 }

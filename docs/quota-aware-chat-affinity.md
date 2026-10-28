@@ -4,12 +4,11 @@ Use this optional profile to keep a chat on one exact local credential. A failed
 
 ## Configure the server
 
-Add this block under `routing`. Keep `session-affinity: false`. Home and plugins must be disabled.
+Add this block under `routing`. Home and plugins must be disabled.
 
 ```yaml
 routing:
   strategy: round-robin
-  session-affinity: false
   quota-aware-chat-affinity:
     namespace: local-chats
     state-dir: /var/lib/cliproxy/chat-affinity
@@ -36,7 +35,15 @@ Strict routing supports the local Codex and native Claude executors. Other provi
 
 By default, every request must carry the chat headers below and is rejected with `chat_identity_required` otherwise. Clients such as Claude Code and the Codex CLI cannot save a chat handle between turns, so they cannot use strict chats.
 
-Set `allow-legacy-requests: true` to let them share the server. A request with no `X-CLIProxy-Chat-*` header then uses the normal `strategy`, priorities, and retries, and may move to another credential when one fails. Any request that carries a chat header is still validated and pinned as a strict chat. Quota polling and history keep running for every credential. Changing this field needs a restart, like the rest of the profile.
+Set `allow-legacy-requests: true` to let them share the server. A request with no `X-CLIProxy-Chat-*` header then uses session-sticky routing, priorities, and retries: each client session stays on one credential, so its prompt cache stays warm, and the `strategy` places new sessions and moves a session only when its credential fails or cools down. Any request that carries a chat header is still validated and pinned as a strict chat. Quota polling and history keep running for every credential. Changing this field needs a restart, like the rest of the profile.
+
+## Spend the weekly quota that resets first
+
+Set `strategy: weekly-reset-first` to place new sessions on the credential whose weekly quota window resets soonest, so allowance that would expire unused is spent first. New sessions keep going there until it is cooling down after a limit or failure, or a fresh quota reading shows any of its windows exhausted, such as the Claude five-hour session. The next credential by weekly reset then takes new sessions, and they return once the first recovers. When a weekly reset passes, that credential moves behind the others until a new reading arrives. Existing sessions do not follow these changes: they stay on their credential, keeping its prompt cache and account-bound thinking, until it fails or cools down.
+
+Only credentials in the highest available priority tier are considered. A weekly reset time stays usable after `max-quota-age` because it does not change during the week, so ordering holds while usage polls back off. Exhaustion uses only fresh readings. Credentials without a known weekly reset come last, in fill-first order. The strategy applies to every provider, so Codex credentials are ordered the same way. For a strict chat, the strategy is the fallback selector used when quota ranking has no data.
+
+Without this profile there is no quota data, and the strategy behaves like `fill-first` and logs a warning.
 
 Point a client at the server with its usual base URL setting and a server API key. For Claude Code, set `ANTHROPIC_BASE_URL` to the server URL and `ANTHROPIC_AUTH_TOKEN` to the key. For Codex, add a model provider with `base_url` set to the server URL plus `/v1`, `wire_api = "responses"`, and an `env_key` naming the variable that holds the key.
 

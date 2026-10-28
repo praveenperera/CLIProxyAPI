@@ -449,7 +449,7 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 	if !cliproxyexecutor.DownstreamWebsocket(ctx) {
 		return available
 	}
-	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+	if !strings.EqualFold(strings.TrimSpace(provider), "codex") && (provider != "mixed" || !allCodexAuths(available)) {
 		return available
 	}
 
@@ -464,6 +464,17 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 		return wsEnabled
 	}
 	return available
+}
+
+// allCodexAuths reports whether a mixed-provider pick only has Codex candidates, as when
+// session affinity routes a single-provider Codex request through the mixed legacy path
+func allCodexAuths(auths []*Auth) bool {
+	for _, a := range auths {
+		if canonicalSchedulingProvider(executorKeyFromAuth(a)) != "codex" {
+			return false
+		}
+	}
+	return true
 }
 
 func collectAvailableByPriority(auths []*Auth, model string, now time.Time) (available map[int][]*Auth, cooldownCount int, earliest time.Time) {

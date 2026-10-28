@@ -56,12 +56,12 @@ func (cfg *Config) QuotaAffinitySettings() (QuotaAffinitySettings, error) {
 	}
 	p := cfg.Routing.QuotaAwareChatAffinity
 	switch strings.ToLower(strings.TrimSpace(cfg.Routing.Strategy)) {
-	case "", "round-robin", "weighted-round-robin", "weightedroundrobin", "wrr", "fill-first", "fillfirst", "ff":
+	case "", "round-robin", "weighted-round-robin", "weightedroundrobin", "wrr", "fill-first", "fillfirst", "ff", "weekly-reset-first", "weeklyresetfirst", "wrf":
 	default:
 		return s, fmt.Errorf("quota affinity requires a supported fallback strategy")
 	}
-	if cfg.Home.Enabled || cfg.Plugins.Enabled || cfg.Routing.SessionAffinity {
-		return s, fmt.Errorf("quota affinity requires local built-in routing without Home, plugins, or soft affinity")
+	if cfg.Home.Enabled || cfg.Plugins.Enabled {
+		return s, fmt.Errorf("quota affinity requires local built-in routing without Home or plugins")
 	}
 	if !utf8.ValidString(p.Namespace) || p.Namespace == "" || len(p.Namespace) > 256 || strings.TrimSpace(p.Namespace) != p.Namespace || strings.ContainsAny(p.Namespace, "\r\n\x00") {
 		return s, fmt.Errorf("quota affinity requires a valid namespace")

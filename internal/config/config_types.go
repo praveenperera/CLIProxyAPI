@@ -460,15 +460,15 @@ type RoutingConfig struct {
 	QuotaAwareChatAffinity *QuotaAffinityConfig `yaml:"quota-aware-chat-affinity,omitempty" json:"quota-aware-chat-affinity,omitempty"`
 
 	// Strategy selects the credential selection strategy.
-	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
+	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first",
+	// "weekly-reset-first" (needs quota-aware-chat-affinity for quota data).
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
 
-	// SessionAffinity enables universal session-sticky routing for all clients.
-	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
-	// followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,
+	// Session-sticky routing is always on for all clients, because prompt caches are not
+	// shared across credentials. Explicit Claude Code, Codex, OpenCode, and pi session headers
+	// are preferred, followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,
 	// execution or derived session identity, and the existing message-content hash fallback.
 	// Automatic failover is always enabled when bound auth becomes unavailable.
-	SessionAffinity bool `yaml:"session-affinity,omitempty" json:"session-affinity,omitempty"`
 
 	// SessionAffinityTTL specifies how long session-to-auth bindings are retained.
 	// Default: 1h. Accepts duration strings like "30m", "1h", "2h30m".
@@ -478,7 +478,7 @@ type RoutingConfig struct {
 	// inherit and bind to the parent's upstream credential across all providers (Claude, Codex,
 	// Antigravity, Gemini), maximizing prompt and KV cache reuse.
 	// When false, subagents are distributed across the credential pool via the fallback selector.
-	// Default: true. Ignored when SessionAffinity is false.
+	// Default: true.
 	SessionAffinitySubagents *bool `yaml:"session-affinity-subagents,omitempty" json:"session-affinity-subagents,omitempty"`
 
 	// SessionAffinityRebindOn controls which credential failures rebind an established session
@@ -488,7 +488,6 @@ type RoutingConfig struct {
 	//   - "quota": transient errors (408, 5xx, empty stream, buffer limit) fail over for that
 	//     request only while keeping the session bound to its original credential; quota and
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
-	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
 }
 

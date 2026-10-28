@@ -74,7 +74,7 @@ func (m *Manager) PluginSchedulerWantsAcrossPriorities() bool {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector:
+	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector, *WeeklyResetFirstSelector:
 		return true
 	default:
 		return false
@@ -440,6 +440,8 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.mu.Unlock()
 		return
 	}
+	// bind before publishing so concurrent Picks never see the quota source change
+	m.bindSelectorQuota(selector)
 	m.selector = selector
 	m.mu.Unlock()
 
@@ -1817,7 +1819,12 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
-	return isBuiltInSelector(m.Selector())
+	selector := m.Selector()
+	// the scheduler cannot order by quota observations, so weekly-reset-first always calls Pick
+	if _, weekly := selector.(*WeeklyResetFirstSelector); weekly {
+		return false
+	}
+	return isBuiltInSelector(selector)
 }
 
 func shouldRetrySchedulerPick(err error) bool {

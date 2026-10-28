@@ -271,6 +271,7 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
 	}
+	manager.bindSelectorQuota(selector)
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
 	manager.apiKeyModelRouting.Store(&apiKeyModelRoutingSnapshot{config: &internalconfig.Config{}})

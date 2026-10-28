@@ -51,7 +51,7 @@ func TestQuotaAffinitySharedStartupValidation(t *testing.T) {
 		}
 	}
 	cfg := &Config{Routing: RoutingConfig{QuotaAwareChatAffinity: &QuotaAffinityConfig{Namespace: "example", StateDir: state}}}
-	for _, mutate := range []func(*Config){func(c *Config) { c.Home.Enabled = true }, func(c *Config) { c.Plugins.Enabled = true }, func(c *Config) { c.Routing.SessionAffinity = true }, func(c *Config) { c.Routing.Strategy = "invalid" }, func(c *Config) { c.AuthDir = filepath.Dir(state) }} {
+	for _, mutate := range []func(*Config){func(c *Config) { c.Home.Enabled = true }, func(c *Config) { c.Plugins.Enabled = true }, func(c *Config) { c.Routing.Strategy = "invalid" }, func(c *Config) { c.AuthDir = filepath.Dir(state) }} {
 		copy := *cfg
 		mutate(&copy)
 		if _, err := copy.QuotaAffinitySettings(); err == nil {

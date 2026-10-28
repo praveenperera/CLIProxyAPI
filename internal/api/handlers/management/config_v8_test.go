@@ -892,3 +892,34 @@ api-keys:
 		t.Fatalf("unexpected loaded headers: %+v", loaded.OpenAICompatibility[0].Headers)
 	}
 }
+
+func TestConfigV8UploadDropsRetiredSessionAffinitySwitch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "server: {port: 8317}\nrouting: {strategy: fill-first, session-affinity: false}\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{cfg: cfg, configFilePath: path}
+	router := gin.New()
+	router.PUT("/v8/management/config.yaml", h.ConfigV8)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/v8/management/config.yaml", strings.NewReader("server: {port: 8318}\nrouting: {strategy: fill-first, session-affinity: true}\n")))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("upload with retired switch: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	saved, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = config.ValidateV8Config(saved); err != nil {
+		t.Fatalf("saved config is invalid: %v\n%s", err, saved)
+	}
+	if loaded, errLoad := config.LoadConfig(path); errLoad != nil || loaded.Port != 8318 || loaded.Routing.Strategy != "fill-first" {
+		t.Fatalf("upload lost settings: cfg=%+v error=%v", loaded, errLoad)
+	}
+}

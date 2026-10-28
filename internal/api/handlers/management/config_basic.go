@@ -318,6 +318,8 @@ func normalizeRoutingStrategy(strategy string) (string, bool) {
 		return "weighted-round-robin", true
 	case "fill-first", "fillfirst", "ff":
 		return "fill-first", true
+	case "weekly-reset-first", "weeklyresetfirst", "wrf":
+		return "weekly-reset-first", true
 	default:
 		return "", false
 	}
