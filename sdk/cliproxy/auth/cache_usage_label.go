@@ -19,9 +19,15 @@ const cacheUsageTitleMaxRunes = 120
 // claudeCodeWorkingDirPrefix starts the line Claude Code puts in its system prompt
 var claudeCodeWorkingDirPrefix = []byte("Primary working directory: ")
 
+// workingDirMaxBytes bounds the line read after a working directory marker; real paths are far
+// shorter, and the bound keeps a payload that repeats the marker from rescanning its whole tail
+// for every repeat
+const workingDirMaxBytes = 1000
+
 var (
-	// codexCwdPattern matches the cwd Codex sends in its environment context
-	codexCwdPattern = regexp.MustCompile(`<cwd>([^<]+)</cwd>`)
+	// codexCwdPattern matches the cwd Codex sends in its environment context, up to
+	// workingDirMaxBytes long
+	codexCwdPattern = regexp.MustCompile(`<cwd>([^<]{1,1000})</cwd>`)
 	// inlineReminderPattern matches reminders clients splice into otherwise real prompt text
 	inlineReminderPattern = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
 	// wrappedBlockPattern matches a text block that is one client-injected tag, such as a
@@ -134,30 +140,41 @@ func workingDirName(payload []byte) string {
 
 // findWorkingDir returns the first working directory in raw JSON text that is an absolute path
 func findWorkingDir(raw []byte) string {
-	var candidates []string
 	for rest := raw; ; {
 		i := bytes.Index(rest, claudeCodeWorkingDirPrefix)
 		if i < 0 {
 			break
 		}
 		rest = rest[i+len(claudeCodeWorkingDirPrefix):]
+		line := rest[:min(len(rest), workingDirMaxBytes)]
 		// the prefix sits inside a JSON string, so the line ends at an escaped newline or the quote
-		end := len(rest)
 		for _, sep := range [][]byte{[]byte(`\n`), []byte(`"`)} {
-			if j := bytes.Index(rest, sep); j >= 0 && j < end {
-				end = j
+			if j := bytes.Index(line, sep); j >= 0 {
+				line = line[:j]
 			}
 		}
-		candidates = append(candidates, string(rest[:end]))
-	}
-	for _, match := range codexCwdPattern.FindAllSubmatch(raw, -1) {
-		candidates = append(candidates, string(match[1]))
-	}
-	for _, dir := range candidates {
-		dir = strings.TrimRight(strings.TrimSpace(dir), "/")
-		if strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "~/") {
-			return path.Base(dir)
+		if dir := absoluteDirName(line); dir != "" {
+			return dir
 		}
+	}
+	for rest := raw; ; {
+		match := codexCwdPattern.FindSubmatchIndex(rest)
+		if match == nil {
+			return ""
+		}
+		if dir := absoluteDirName(rest[match[2]:match[3]]); dir != "" {
+			return dir
+		}
+		rest = rest[match[1]:]
+	}
+}
+
+// absoluteDirName returns the last element of an absolute or home-relative path, or "" for
+// anything else, such as a marker quoted in conversation text
+func absoluteDirName(raw []byte) string {
+	dir := strings.TrimRight(strings.TrimSpace(string(raw)), "/")
+	if strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "~/") {
+		return path.Base(dir)
 	}
 	return ""
 }
