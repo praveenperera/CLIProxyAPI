@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -106,5 +107,25 @@ func TestCacheUsageSessionLabelLifecycle(t *testing.T) {
 	}
 	if restarted.cacheUsage.hasLabel("claude:orphan") {
 		t.Fatal("orphan label survived past the pending window")
+	}
+}
+
+func TestCacheUsageLabelsStopGrowingAtTheCap(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	c := newCacheUsage(func() time.Time { return now })
+	// requests that fail before recording usage leave labels with no session
+	for i := range cacheUsageMaxLabels {
+		c.noteLabel("failed-"+strconv.Itoa(i), "title", "project")
+	}
+	c.noteLabel("new-session", "kept later", "project")
+	if c.hasLabel("new-session") || len(c.labels) != cacheUsageMaxLabels {
+		t.Fatalf("labels = %d, new session labeled %v", len(c.labels), c.hasLabel("new-session"))
+	}
+
+	// once the pending labels age out, a new session is named again
+	now = now.Add(cacheUsageLabelPending + time.Minute)
+	c.noteLabel("new-session", "kept later", "project")
+	if !c.hasLabel("new-session") || len(c.labels) != 1 {
+		t.Fatalf("labels = %d after the pending window", len(c.labels))
 	}
 }

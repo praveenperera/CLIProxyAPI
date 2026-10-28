@@ -24,6 +24,21 @@ const cacheUsageSessionIdle = 7 * 24 * time.Hour
 // cacheUsageMaxSessions caps tracked sessions; the least recently active are dropped first
 const cacheUsageMaxSessions = 2000
 
+// cacheUsageMaxLabels caps session labels; a label is read before its request runs, so a
+// request that fails leaves a label without a session until cacheUsageLabelPending passes
+const cacheUsageMaxLabels = 2 * cacheUsageMaxSessions
+
+// cacheUsageMaxUnpricedModels caps the unpriced model names that get their own row, since the
+// upstream names them; later names share cacheUsageOtherModel until a restart rebuilds the set
+// from retained hours
+const cacheUsageMaxUnpricedModels = 64
+
+// cacheUsageModelMaxBytes bounds a model name kept in the report
+const cacheUsageModelMaxBytes = 128
+
+// cacheUsageOtherModel holds unpriced models past cacheUsageMaxUnpricedModels
+const cacheUsageOtherModel = "other"
+
 // cacheUsageSaveInterval limits snapshot rewrites; a final save runs when the profile closes
 const cacheUsageSaveInterval = time.Minute
 
@@ -199,19 +214,21 @@ type cacheUsage struct {
 	// saveMu serializes snapshot writes, which share one temp file
 	saveMu sync.Mutex
 
-	mu        sync.Mutex
-	hours     map[cacheUsageHourKey]*CacheUsageTotals
-	sessions  map[string]*cacheUsageSession
-	labels    map[string]*cacheUsageLabel
-	path      string
-	lastSave  time.Time
-	lastPrune time.Time
-	saving    bool
-	dirty     bool
+	mu       sync.Mutex
+	hours    map[cacheUsageHourKey]*CacheUsageTotals
+	sessions map[string]*cacheUsageSession
+	labels   map[string]*cacheUsageLabel
+	// unpricedModels holds the unpriced model names that have their own row
+	unpricedModels map[string]struct{}
+	path           string
+	lastSave       time.Time
+	lastPrune      time.Time
+	saving         bool
+	dirty          bool
 }
 
 func newCacheUsage(now func() time.Time) *cacheUsage {
-	return &cacheUsage{now: now, hours: map[cacheUsageHourKey]*CacheUsageTotals{}, sessions: map[string]*cacheUsageSession{}, labels: map[string]*cacheUsageLabel{}}
+	return &cacheUsage{now: now, hours: map[cacheUsageHourKey]*CacheUsageTotals{}, sessions: map[string]*cacheUsageSession{}, labels: map[string]*cacheUsageLabel{}, unpricedModels: map[string]struct{}{}}
 }
 
 // persistTo loads the snapshot in dir and saves later changes there
@@ -243,6 +260,9 @@ func (c *cacheUsage) persistTo(dir string) {
 			c.hours[h.cacheUsageHourKey] = totals
 		}
 		totals.add(h.Totals)
+		if _, priced := cacheUsagePrices[h.Model]; !priced && h.Model != "" && h.Model != cacheUsageOtherModel {
+			c.unpricedModelLocked(h.Model)
+		}
 	}
 	for _, s := range snapshot.Sessions {
 		if s == nil || s.ID == "" {
@@ -288,8 +308,31 @@ func (c *cacheUsage) noteLabel(sessionID, title, project string) {
 	if c.labels[sessionID] != nil {
 		return
 	}
+	if len(c.labels) >= cacheUsageMaxLabels {
+		c.pruneLabelsLocked(c.now())
+		// a flood of failing requests leaves new sessions untitled rather than growing the map
+		if len(c.labels) >= cacheUsageMaxLabels {
+			return
+		}
+	}
 	c.labels[sessionID] = &cacheUsageLabel{Title: title, Project: project, At: c.now().UnixMilli()}
 	c.dirty = true
+}
+
+// unpricedModelLocked returns the row name for an unpriced model, shortened to
+// cacheUsageModelMaxBytes and folded into cacheUsageOtherModel once the cap is reached
+func (c *cacheUsage) unpricedModelLocked(model string) string {
+	if len(model) > cacheUsageModelMaxBytes {
+		model = strings.ToValidUTF8(model[:cacheUsageModelMaxBytes], "")
+	}
+	if _, ok := c.unpricedModels[model]; ok || model == "" {
+		return model
+	}
+	if len(c.unpricedModels) >= cacheUsageMaxUnpricedModels {
+		return cacheUsageOtherModel
+	}
+	c.unpricedModels[model] = struct{}{}
+	return model
 }
 
 // merge folds another view of the same session into s
@@ -341,6 +384,9 @@ func (c *cacheUsage) record(r usage.Record) {
 	}
 
 	c.mu.Lock()
+	if request.UnpricedRequests > 0 {
+		model = c.unpricedModelLocked(model)
+	}
 	key := cacheUsageHourKey{AuthID: r.AuthID, Provider: r.Provider, Model: model, Hour: at.Truncate(time.Hour).Unix()}
 	totals := c.hours[key]
 	if totals == nil {

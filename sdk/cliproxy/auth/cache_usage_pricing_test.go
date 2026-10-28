@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,5 +88,32 @@ func TestCacheUsageCostByModelAndTier(t *testing.T) {
 	credential := report.Credentials[0]
 	if len(credential.Hours) != 1 || credential.Hours[0].Totals.Requests != 7 || credential.Totals.UnpricedRequests != 3 {
 		t.Fatalf("one credential hour should merge every model: %+v", credential)
+	}
+}
+
+func TestCacheUsageCapsUnpricedModelRows(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	at := time.Now().Truncate(time.Hour).Add(time.Minute)
+	plugin := m.CacheUsagePlugin()
+	for i := range cacheUsageMaxUnpricedModels + 5 {
+		r := cacheUsageRecord("auth-1", "", at, 100, 0, 0)
+		r.ResponseModel = "upstream-model-" + strconv.Itoa(i)
+		plugin.HandleUsage(context.Background(), r)
+	}
+	long := cacheUsageRecord("auth-1", "", at, 100, 0, 0)
+	long.ResponseModel = "upstream-model-0" + strings.Repeat("x", 1000)
+	plugin.HandleUsage(context.Background(), long)
+
+	report := m.CacheUsage(CacheUsageQuery{Since: at.Truncate(time.Hour), Until: at})
+	if len(report.Models) != cacheUsageMaxUnpricedModels+1 {
+		t.Fatalf("models = %d, want %d named rows plus %q", len(report.Models), cacheUsageMaxUnpricedModels, cacheUsageOtherModel)
+	}
+	for _, model := range report.Models {
+		if model.Model == cacheUsageOtherModel && model.Totals.Requests != 6 {
+			t.Errorf("%q holds %d requests, want the 5 past the cap and the over-long name", cacheUsageOtherModel, model.Totals.Requests)
+		}
+		if len(model.Model) > cacheUsageModelMaxBytes {
+			t.Errorf("model name kept at %d bytes", len(model.Model))
+		}
 	}
 }
