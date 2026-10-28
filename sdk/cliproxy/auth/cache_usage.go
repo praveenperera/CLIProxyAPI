@@ -254,15 +254,17 @@ func (c *cacheUsage) persistTo(dir string) {
 		if legacy {
 			h.Totals.markUnpriced()
 		}
-		totals := c.hours[h.cacheUsageHourKey]
+		key := h.cacheUsageHourKey
+		// a snapshot saved before the unpriced row cap can hold more names than it allows
+		if _, priced := cacheUsagePrices[key.Model]; !priced && key.Model != cacheUsageOtherModel {
+			key.Model = c.unpricedModelLocked(key.Model)
+		}
+		totals := c.hours[key]
 		if totals == nil {
 			totals = &CacheUsageTotals{}
-			c.hours[h.cacheUsageHourKey] = totals
+			c.hours[key] = totals
 		}
 		totals.add(h.Totals)
-		if _, priced := cacheUsagePrices[h.Model]; !priced && h.Model != "" && h.Model != cacheUsageOtherModel {
-			c.unpricedModelLocked(h.Model)
-		}
 	}
 	for _, s := range snapshot.Sessions {
 		if s == nil || s.ID == "" {

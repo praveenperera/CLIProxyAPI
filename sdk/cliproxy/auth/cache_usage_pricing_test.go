@@ -117,3 +117,25 @@ func TestCacheUsageCapsUnpricedModelRows(t *testing.T) {
 		}
 	}
 }
+
+func TestCacheUsageCapsUnpricedModelRowsFromSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	hour := strconv.FormatInt(now.Truncate(time.Hour).Unix(), 10)
+	// a snapshot saved before the cap existed can hold any number of unpriced names
+	var hours []string
+	for i := range cacheUsageMaxUnpricedModels + 6 {
+		hours = append(hours, `{"auth_id":"auth-1","provider":"openai","model":"upstream-model-`+strconv.Itoa(i)+`","t":`+hour+`,"totals":{"requests":1,"input_tokens":10,"uncached_tokens":10,"unpriced_requests":1}}`)
+	}
+	snapshot := `{"version":2,"hours":[` + strings.Join(hours, ",") + `]}`
+	if errWrite := os.WriteFile(filepath.Join(dir, affinity.CacheUsageFileName), []byte(snapshot), 0o600); errWrite != nil {
+		t.Fatal(errWrite)
+	}
+
+	c := newCacheUsage(func() time.Time { return now })
+	c.persistTo(dir)
+	other := c.hours[cacheUsageHourKey{AuthID: "auth-1", Provider: "openai", Model: cacheUsageOtherModel, Hour: now.Truncate(time.Hour).Unix()}]
+	if len(c.hours) != cacheUsageMaxUnpricedModels+1 || other == nil || other.Requests != 6 {
+		t.Fatalf("hours = %d, other = %+v", len(c.hours), other)
+	}
+}
