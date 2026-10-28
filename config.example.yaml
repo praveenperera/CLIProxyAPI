@@ -1230,6 +1230,10 @@ observability:
     # Default: 60. Max: 3600.
     redis-usage-queue-retention-seconds: 60
 
+    # T3 Code's state database. When set, the prompt cache report titles Claude Code and Codex
+    # sessions with their T3 thread title. The file is opened read-only.
+    # t3-state-db: "~/.t3/userdata/statev2.sqlite"
+
   # Enable pprof HTTP debug server (host:port). Keep it bound to localhost for safety.
   pprof:
     enable: false

@@ -127,8 +127,14 @@ func (h *Handler) GetCacheUsage(c *gin.Context) {
 	for _, model := range report.Models {
 		resp.Models = append(resp.Models, cacheUsageModelEntry{Model: model.Model, Provider: model.Provider, Totals: cacheUsageTotals(model.Totals)})
 	}
+	// a T3 thread title names the session better than its first prompt, and follows renames
+	t3Titles := h.t3Titles.lookup(c.Request.Context(), t3StateDBPath(h.configSnapshot()), now)
 	for _, s := range report.Sessions {
-		resp.Sessions = append(resp.Sessions, cacheUsageSessionEntry{SessionID: s.SessionID, ParentSessionID: s.ParentSessionID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model, Title: s.Title, Project: s.Project, FirstSeen: s.FirstSeen.Unix(), LastSeen: s.LastSeen.Unix(), Totals: cacheUsageTotals(s.Totals), LastRequest: cacheUsageTotals(s.LastRequest)})
+		title := s.Title
+		if t3Title := t3Titles[s.SessionID]; t3Title != "" {
+			title = t3Title
+		}
+		resp.Sessions = append(resp.Sessions, cacheUsageSessionEntry{SessionID: s.SessionID, ParentSessionID: s.ParentSessionID, AuthID: s.AuthID, Provider: s.Provider, Model: s.Model, Title: title, Project: s.Project, FirstSeen: s.FirstSeen.Unix(), LastSeen: s.LastSeen.Unix(), Totals: cacheUsageTotals(s.Totals), LastRequest: cacheUsageTotals(s.LastRequest)})
 	}
 	c.JSON(http.StatusOK, resp)
 }
