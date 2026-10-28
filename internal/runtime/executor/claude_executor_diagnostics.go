@@ -140,6 +140,21 @@ func observeClaudeSSEEvent(rawEvent []byte, messageID *string, completed *bool, 
 	}
 }
 
+// isClaudeOverloadedSSEEvent reports an SSE error event whose error type is overloaded_error
+func isClaudeOverloadedSSEEvent(rawEvent []byte) bool {
+	for _, line := range bytes.Split(rawEvent, []byte("\n")) {
+		trimmed := bytes.TrimSpace(line)
+		if !bytes.HasPrefix(trimmed, []byte("data:")) {
+			continue
+		}
+		payload := gjson.ParseBytes(bytes.TrimSpace(trimmed[len("data:"):]))
+		if payload.Get("type").String() == "error" && payload.Get("error.type").String() == "overloaded_error" {
+			return true
+		}
+	}
+	return false
+}
+
 func claudeMessageIDFromSSE(data []byte) string {
 	var messageID string
 	completed := false

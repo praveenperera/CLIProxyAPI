@@ -213,6 +213,8 @@ type Manager struct {
 
 	// Retry controls request retry behavior.
 	requestRetry        atomic.Int32
+	transientRetries    atomic.Int32
+	transientRetryWait  func(context.Context, time.Duration) error
 	maxRetryCredentials atomic.Int32
 	maxRetryInterval    atomic.Int64
 

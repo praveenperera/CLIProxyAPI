@@ -844,7 +844,7 @@ func TestV8LegacyNullRouting(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse legacy null routing: %v", err)
 			}
-			if cfg.Port != 8317 || !reflect.DeepEqual(cfg.Routing, RoutingConfig{}) {
+			if cfg.Port != 8317 || !reflect.DeepEqual(cfg.Routing, RoutingConfig{TransientRetries: 2}) {
 				t.Fatal("null routing did not preserve default routing")
 			}
 			path := filepath.Join(t.TempDir(), "config.yaml")

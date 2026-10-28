@@ -935,3 +935,41 @@ func TestTranslatedClaudeStreamTruncationPreservesBufferedUsageOnFailure(t *test
 		}
 	})
 }
+
+// An overload reported as the first SSE event reaches the conductor as a stream error with no
+// payload, so it can retry before the client receives anything
+func TestClaudeExecutorStreamLeadingOverloadIsStreamError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n")
+	}))
+	defer server.Close()
+
+	exec := NewClaudeExecutor(&config.Config{})
+	auth := &cliproxyauth.Auth{Attributes: map[string]string{"api_key": "key-123", "base_url": server.URL}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result, err := exec.ExecuteStream(ctx, auth, cliproxyexecutor.Request{
+		Model:   "claude-opus-5",
+		Payload: []byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":"hi"}],"stream":true}`),
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatClaude, ResponseFormat: sdktranslator.FormatClaude})
+	if err != nil {
+		t.Fatalf("ExecuteStream() error = %v", err)
+	}
+
+	var chunkErr error
+	var output bytes.Buffer
+	for chunk := range result.Chunks {
+		if chunk.Err != nil {
+			chunkErr = chunk.Err
+			continue
+		}
+		output.Write(chunk.Payload)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("leading overload was forwarded: %q", output.String())
+	}
+	if chunkErr == nil || !strings.Contains(chunkErr.Error(), "overloaded_error") {
+		t.Fatalf("chunk error = %v, want the overload as a stream error", chunkErr)
+	}
+}

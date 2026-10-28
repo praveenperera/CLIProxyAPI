@@ -419,15 +419,23 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			var upstreamMessageID string
 			var upstreamStreamErr error
 			upstreamCompleted := false
+			forwarded := false
 			flushEvent := func() bool {
 				if event.Len() == 0 {
 					return true
 				}
 				observeClaudeSSEEvent(event.Bytes(), &upstreamMessageID, &upstreamCompleted, &upstreamStreamErr)
+				// an overload reported before any event reached the client becomes a stream error
+				// instead, so the request can be retried before anything is sent
+				if !forwarded && upstreamStreamErr != nil && isClaudeOverloadedSSEEvent(event.Bytes()) {
+					event.Reset()
+					return true
+				}
 				cloned := bytes.Clone(event.Bytes())
 				event.Reset()
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: cloned}:
+					forwarded = true
 					return true
 				case <-ctx.Done():
 					return false

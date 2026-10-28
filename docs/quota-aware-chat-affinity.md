@@ -37,6 +37,16 @@ By default, every request must carry the chat headers below and is rejected with
 
 Set `allow-legacy-requests: true` to let them share the server. A request with no `X-CLIProxy-Chat-*` header then uses session-sticky routing, priorities, and retries: each client session stays on one credential, so its prompt cache stays warm, and the `strategy` places new sessions and moves a session only when its credential fails or cools down. These session bindings are saved to `session-bindings.json` in the state directory every minute and at shutdown, so a restart keeps each live session on its credential until its `session-affinity-ttl` runs out. Bindings made in the last minute before a crash are lost. Sessions matched only by message history, without a session ID, are not saved. Any request that carries a chat header is still validated and pinned as a strict chat. Quota polling and history keep running for every credential. Changing this field needs a restart, like the rest of the profile.
 
+## Retry brief upstream failures
+
+`routing.transient-retries` defaults to `2`: up to three attempts on the same credential before normal failover. The waits are 1 second, then 2 seconds. Set it to `0` to disable these extra attempts. A config reload applies the new limit to subsequent credential/model attempts. Request cancellation stops a wait and returns the context error.
+
+These retries cover HTTP 408 and every 5xx status, including 529, Anthropic `overloaded_error` (also when Claude sends it as the first stream event), transient transport failures, and streams that fail or close before the first data payload. No retry occurs after the first stream data payload. Auth, quota, model-support, invalid-request, and configured stop errors keep their existing behavior, and a configured `continue` action fails over at once. Intermediate failures do not change cooldowns or session bindings. Only the final result is recorded.
+
+`session-affinity-rebind-on` applies after these retries are exhausted. With `any`, normal failover can move the session. With `quota`, brief failures do not change the saved session binding. Strict chats still cannot switch accounts. Home dispatch does not use these same-credential retries.
+
+These retries do not consume `request-retry` rounds or the credential limit. Each credential/model attempt in an allowed round has one same-credential retry budget, shared with the existing one-time refresh-on-401 recovery. Executors rebuild each attempt from the original request, so configured output is not passed through payload rules a second time.
+
 ## Rank new sessions with a routing order
 
 Set `strategy: ordered` and list criteria in `order` to choose where new sessions go:

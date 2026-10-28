@@ -32,6 +32,17 @@ func (m *Manager) SetRetryConfig(retry int, maxRetryInterval time.Duration, maxR
 	m.maxRetryInterval.Store(maxRetryInterval.Nanoseconds())
 }
 
+// SetTransientRetryConfig updates the extra same-credential attempt limit
+func (m *Manager) SetTransientRetryConfig(retries int) {
+	if m == nil {
+		return
+	}
+	if retries < 0 {
+		retries = 0
+	}
+	m.transientRetries.Store(int32(retries))
+}
+
 // RegisterExecutor registers a provider executor with the manager.
 func (m *Manager) RegisterExecutor(executor ProviderExecutor) {
 	if executor == nil {

@@ -641,7 +641,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 			executionSeq := m.nextExecutionSeq()
 			startExec := time.Now()
-			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
+			transient := m.newTransientRetry()
+			resp, errExec := transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.Execute)
 			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 			durationExec := time.Since(startExec)
 			if errExec != nil {
@@ -660,7 +661,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 					executionSeq = m.nextExecutionSeq()
 					startRetry := time.Now()
-					resp, errExec = executor.Execute(execCtx, auth, execReq, execOpts)
+					resp, errExec = transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.Execute)
 					errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 					durationRetry := time.Since(startRetry)
 					if errExec != nil {
@@ -871,7 +872,8 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 			executionSeq := m.nextExecutionSeq()
 			startExec := time.Now()
-			resp, errExec := executor.CountTokens(execCtx, auth, execReq, execOpts)
+			transient := m.newTransientRetry()
+			resp, errExec := transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.CountTokens)
 			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 			durationExec := time.Since(startExec)
 			if errExec != nil {
@@ -890,7 +892,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 					execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 					executionSeq = m.nextExecutionSeq()
 					startRetry := time.Now()
-					resp, errExec = executor.CountTokens(execCtx, auth, execReq, execOpts)
+					resp, errExec = transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.CountTokens)
 					errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 					durationRetry := time.Since(startRetry)
 					if errExec != nil {

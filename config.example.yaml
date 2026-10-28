@@ -196,6 +196,9 @@ routing:
   #     request only while keeping the session bound to its original credential; quota and auth
   #     errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
   session-affinity-rebind-on: "any"
+  # Retry brief upstream failures on the same credential before failover (default: 2 extra attempts)
+  # Wait 1s before the first retry, 2s before the second; 0 disables. Reload takes effect on new attempts
+  transient-retries: 2
 
   # Optional local durable chat affinity; omit this block to keep legacy HTTP routing
   # Requires authenticated callers and explicit X-CLIProxy-Chat-* headers

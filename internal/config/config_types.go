@@ -493,6 +493,10 @@ type RoutingConfig struct {
 	//     request only while keeping the session bound to its original credential; quota and
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+
+	// TransientRetries limits extra same-credential attempts for brief upstream failures
+	// Default: 2, with a linear backoff of one second per retry; zero disables retries
+	TransientRetries int `yaml:"transient-retries" json:"transient-retries"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

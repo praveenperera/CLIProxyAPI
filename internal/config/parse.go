@@ -31,6 +31,7 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	cfg.DisableCooling = false
 	cfg.SaveCooldownStatus = false
 	cfg.TransientErrorCooldownSeconds = 0
+	cfg.Routing.TransientRetries = 2
 	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.WebsocketAuth = true
 	cfg.Pprof.Enable = false
