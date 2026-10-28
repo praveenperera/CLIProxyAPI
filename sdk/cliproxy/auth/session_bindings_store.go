@@ -28,11 +28,15 @@ type sessionBindingsSnapshot struct {
 type sessionBindingsStore struct {
 	cache func() *SessionCache
 
-	mu      sync.Mutex
-	path    string
-	saved   uint64
-	stop    chan struct{}
-	stopped chan struct{}
+	mu   sync.Mutex
+	path string
+	// pending holds a loaded snapshot until a session cache exists to restore it into
+	pending *sessionBindingsSnapshot
+	// savedCache and saved identify the last written state; a replaced cache always saves
+	savedCache *SessionCache
+	saved      uint64
+	stop       chan struct{}
+	stopped    chan struct{}
 }
 
 func newSessionBindingsStore(cache func() *SessionCache) *sessionBindingsStore {
@@ -60,9 +64,8 @@ func (s *sessionBindingsStore) open(dir string) {
 	} else if !os.IsNotExist(errRead) {
 		log.WithError(errRead).Warn("session bindings: failed to read snapshot")
 	}
-	if restored := s.cache().restore(snapshot.Groups, snapshot.Sequence); restored > 0 {
-		log.Infof("session bindings: restored %d session bindings", restored)
-	}
+	s.pending = &snapshot
+	s.restorePendingLocked(s.cache())
 
 	s.stop, s.stopped = make(chan struct{}), make(chan struct{})
 	go s.loop(s.stop, s.stopped)
@@ -82,6 +85,18 @@ func (s *sessionBindingsStore) loop(stop, stopped chan struct{}) {
 	}
 }
 
+// restorePendingLocked restores the loaded snapshot once a session cache exists; an SDK
+// manager may install its session selector after the profile opens
+func (s *sessionBindingsStore) restorePendingLocked(cache *SessionCache) {
+	if s.pending == nil || cache == nil {
+		return
+	}
+	if restored := cache.restore(s.pending.Groups, s.pending.Sequence); restored > 0 {
+		log.Infof("session bindings: restored %d session bindings", restored)
+	}
+	s.pending = nil
+}
+
 // close stops periodic saves and writes the final snapshot
 func (s *sessionBindingsStore) close() {
 	if s == nil {
@@ -97,7 +112,7 @@ func (s *sessionBindingsStore) close() {
 	}
 	s.save()
 	s.mu.Lock()
-	s.path = ""
+	s.path, s.pending = "", nil
 	s.mu.Unlock()
 }
 
@@ -108,8 +123,14 @@ func (s *sessionBindingsStore) save() {
 	if s.path == "" {
 		return
 	}
-	groups, sequence, changes := s.cache().snapshot()
-	if changes == s.saved {
+	cache := s.cache()
+	// nothing to save yet, and writing now would replace bindings still waiting to restore
+	if cache == nil {
+		return
+	}
+	s.restorePendingLocked(cache)
+	groups, sequence, changes := cache.snapshot()
+	if cache == s.savedCache && changes == s.saved {
 		return
 	}
 	data, errEncode := json.Marshal(sessionBindingsSnapshot{Version: 1, Sequence: sequence, Groups: groups})
@@ -126,7 +147,7 @@ func (s *sessionBindingsStore) save() {
 		log.WithError(errRename).Warn("session bindings: failed to save snapshot")
 		return
 	}
-	s.saved = changes
+	s.savedCache, s.saved = cache, changes
 }
 
 // sessionAffinityCache returns the current selector's session cache, or nil without one

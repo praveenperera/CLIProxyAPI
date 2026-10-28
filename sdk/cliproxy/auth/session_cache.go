@@ -2,7 +2,6 @@ package auth
 
 import (
 	"container/list"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -516,7 +515,8 @@ func (c *SessionCache) snapshot() ([]sessionCacheRecord, uint64, uint64) {
 }
 
 // restore adds saved groups that are still unexpired; a binding made since startup is newer
-// than the saved one, so any group sharing an alias with a live binding is skipped
+// than the saved one, so any group sharing an alias with a live binding is skipped, live
+// selections are renumbered after the saved ones, and saved groups are evicted first
 func (c *SessionCache) restore(records []sessionCacheRecord, sequence uint64) int {
 	if c == nil {
 		return 0
@@ -525,10 +525,29 @@ func (c *SessionCache) restore(records []sessionCacheRecord, sequence uint64) in
 	defer c.mu.Unlock()
 	c.ensureInitializedLocked()
 	now := time.Now()
-	ordered := append([]sessionCacheRecord(nil), records...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].ExpiresAt < ordered[j].ExpiresAt })
+
+	// latestSessionAuth compares sequences, so live selections must outrank every saved one
+	if sequence > 0 {
+		for key, group := range c.groups {
+			if group.binding.sequence == 0 {
+				continue
+			}
+			group.binding.sequence += sequence
+			c.groups[key] = group
+			for _, alias := range group.aliases {
+				if current, ok := c.entries[alias]; ok && sameSessionEntryGroup(current, group) {
+					c.entries[alias] = group
+				}
+			}
+		}
+		c.bindingSequence += sequence
+	}
+
+	// records arrive oldest first; inserting newest first at the front keeps that order ahead
+	// of live groups
 	restored := 0
-	for _, r := range ordered {
+	for i := len(records) - 1; i >= 0; i-- {
+		r := records[i]
 		expiresAt := time.UnixMilli(r.ExpiresAt)
 		aliases := compactSessionAliases(mergeSessionAliases(nil, r.Aliases...))
 		if r.AuthID == "" || len(aliases) == 0 || !now.Before(expiresAt) {
@@ -544,11 +563,13 @@ func (c *SessionCache) restore(records []sessionCacheRecord, sequence uint64) in
 		if live {
 			continue
 		}
-		binding := sessionBinding{sessionID: r.SessionID, provider: r.Provider, sequence: r.Sequence}
+		binding := sessionBinding{sessionID: r.SessionID, provider: r.Provider, sequence: min(r.Sequence, sequence)}
 		c.replaceAliasGroupsLocked(r.AuthID, expiresAt, aliases, binding)
+		if elem, ok := c.evictionElements[aliases[0]]; ok {
+			c.evictionOrder.MoveToFront(elem)
+		}
 		restored++
 	}
-	c.bindingSequence = max(c.bindingSequence, sequence)
 	return restored
 }
 

@@ -53,3 +53,62 @@ func TestSessionBindingsSurviveRestart(t *testing.T) {
 		t.Fatalf("new session served %s, want the sooner-resetting %s", got, ids[1])
 	}
 }
+
+func TestSessionBindingsRestoreLateCacheAndOrdering(t *testing.T) {
+	dir := t.TempDir()
+	saved := NewSessionCacheWithCapacity(time.Hour, 3)
+	t.Cleanup(saved.Stop)
+	saved.setSessionAliases("auth-c", "claude", "other", "other")
+	// saved later, so its sequence outranks the live selection unless restore renumbers
+	saved.setSessionAliases("auth-a", "claude", "parent", "parent::m1")
+	writer := newSessionBindingsStore(func() *SessionCache { return saved })
+	writer.open(dir)
+	writer.close()
+
+	// an SDK manager installs its session selector after the profile opens
+	var live *SessionCache
+	reader := newSessionBindingsStore(func() *SessionCache { return live })
+	reader.open(dir)
+	live = NewSessionCacheWithCapacity(time.Hour, 3)
+	t.Cleanup(live.Stop)
+	live.setSessionAliases("auth-b", "claude", "parent", "parent::m2")
+	reader.save()
+
+	if got, ok := live.Get("parent::m1"); !ok || got != "auth-a" {
+		t.Fatalf("late cache restored parent::m1 = %q, %v; want auth-a", got, ok)
+	}
+	// the selection made before the restore is newer than every saved one
+	if got := live.latestSessionAuth("parent", map[string]struct{}{"claude": {}}); got != "auth-b" {
+		t.Fatalf("latest parent selection = %s, want the live auth-b", got)
+	}
+	// saved groups evict before live ones, oldest saved first
+	live.setSessionAliases("auth-d", "claude", "new", "new")
+	if _, ok := live.Get("other"); ok {
+		t.Fatal("oldest saved group survived eviction")
+	}
+	for _, key := range []string{"parent::m1", "parent::m2", "new"} {
+		if _, ok := live.Get(key); !ok {
+			t.Fatalf("%s was evicted before older saved groups", key)
+		}
+	}
+
+	// a replaced cache saves even when its change count matches the last write
+	reader.close()
+	reopened := newSessionBindingsStore(func() *SessionCache { return live })
+	reopened.open(dir)
+	reopened.save()
+	replacement := NewSessionCacheWithCapacity(time.Hour, 3)
+	t.Cleanup(replacement.Stop)
+	reopened.cache = func() *SessionCache { return replacement }
+	replacement.setSessionAliases("auth-e", "claude", "fresh", "fresh")
+	replacement.changes = reopened.saved
+	reopened.close()
+	check := NewSessionCacheWithCapacity(time.Hour, 3)
+	t.Cleanup(check.Stop)
+	final := newSessionBindingsStore(func() *SessionCache { return check })
+	final.open(dir)
+	t.Cleanup(final.close)
+	if got, ok := check.Get("fresh"); !ok || got != "auth-e" {
+		t.Fatalf("replacement cache binding = %q, %v; want it saved", got, ok)
+	}
+}
