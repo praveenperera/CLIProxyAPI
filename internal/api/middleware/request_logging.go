@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
@@ -426,7 +428,7 @@ func captureRequestInfo(c *gin.Context, captureBody bool) (*RequestInfo, error) 
 	// Capture headers
 	var headers map[string][]string
 	if c.Request.Header != nil {
-		headers = c.Request.Header.Clone()
+		headers = affinity.StripHeaders(c.Request.Header)
 	} else {
 		headers = make(map[string][]string)
 	}

@@ -65,6 +65,7 @@ type Handler struct {
 	siwcCommitMu            sync.Mutex
 	v8AuthUploadMu          sync.Mutex
 	pluginLoginSaveMu       sync.Mutex
+	t3Titles                t3Titles
 }
 
 type configReloadSnapshot struct {

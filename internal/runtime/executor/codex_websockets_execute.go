@@ -192,7 +192,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 	var errDial error
 	dialCtx := ctx
 	if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) || sessionInstructions.ConnectionBound() {
-		conn, closer = existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC)
+		conn, closer = existingWebsocketSessionConn(ctx, sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC)
 		if conn == nil {
 			if errConn := sessionInstructions.OnConnection(nil); errConn != nil {
 				return resp, errConn
@@ -253,7 +253,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 
 	sessionReceipt := sess.sessionInstructions.Sent(conn, sessionInstructions)
 	cliproxyexecutor.MarkUpstreamAttempt(ctx)
-	if errSend := writeCodexWebsocketMessage(sess, conn, wsReqBody); errSend != nil {
+	if errSend := writeCodexWebsocketMessageContext(ctx, sess, conn, wsReqBody); errSend != nil {
 		errSend = mapCodexWebsocketWriteError(sess, conn, errSend)
 		if sess != nil && !isEphemeralSession {
 			if cliproxyexecutor.RequiredUpstreamWebsocket(ctx) {
@@ -306,7 +306,7 @@ func (e *CodexWebsocketsExecutor) Execute(ctx context.Context, auth *cliproxyaut
 				reporter.StartResponseTTFT()
 				sessionReceipt = sess.sessionInstructions.Sent(conn, sessionInstructions)
 				cliproxyexecutor.MarkUpstreamAttempt(ctx)
-				if errSendRetry := writeCodexWebsocketMessage(sess, conn, wsReqBodyRetry); errSendRetry == nil {
+				if errSendRetry := writeCodexWebsocketMessageContext(ctx, sess, conn, wsReqBodyRetry); errSendRetry == nil {
 					wsReqBody = wsReqBodyRetry
 				} else {
 					errSendRetry = mapCodexWebsocketWriteError(sess, connRetry, errSendRetry)

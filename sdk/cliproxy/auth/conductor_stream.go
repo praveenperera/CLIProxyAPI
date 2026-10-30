@@ -706,9 +706,12 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		var preRefreshStreamErr error
 		activeAuth.Store(auth)
+		execCtx = m.observationContextForAuth(execCtx, auth)
+		transient := m.newTransientRetry()
 		attemptCtx := startAttempt(execCtx)
 		startStream := time.Now()
-		streamResult, errStream := executor.ExecuteStream(attemptCtx, auth, execReq, execOpts)
+		streamAttempt, errStream := transient.stream(&attemptCtx, &executionSeq, auth, execReq, execOpts, executor)
+		streamResult := streamAttempt.result
 		syncActiveAuth()
 		errStream = markUpstreamExecutionAttemptFromContext(attemptCtx, errStream)
 		durationStream := time.Since(startStream)
@@ -724,6 +727,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 				if okRefresh {
 					preRefreshStreamErr = errStream
 					auth = refreshed
+					execCtx = m.observationContextForAuth(execCtx, auth)
 					publishSelectedAuthMetadata(execOpts.Metadata, auth)
 					didRefreshOnUnauthorized = true
 					execCtx = m.newUpstreamAttemptContext(execCtx)
@@ -733,7 +737,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					activeAuth.Store(auth)
 					attemptCtx = startAttempt(execCtx)
 					startRetry := time.Now()
-					streamResult, errStream = executor.ExecuteStream(attemptCtx, auth, execReq, execOpts)
+					streamAttempt, errStream = transient.stream(&attemptCtx, &executionSeq, auth, execReq, execOpts, executor)
+					streamResult = streamAttempt.result
 					syncActiveAuth()
 					errStream = markUpstreamExecutionAttemptFromContext(attemptCtx, errStream)
 					durationRetry := time.Since(startRetry)
@@ -814,7 +819,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 
 		var preRefreshBootstrapErr error
 		var preRefreshBootstrapHeaders http.Header
-		buffered, closed, bootstrapErr := readStreamBootstrap(attemptCtx, streamResult.Chunks)
+		buffered, closed, bootstrapErr := streamAttempt.buffered, streamAttempt.closed, streamAttempt.bootstrapErr
 		bootstrapErr = markUpstreamExecutionAttemptFromContext(attemptCtx, bootstrapErr)
 		if bootstrapErr != nil {
 			abandonAttempt(streamResult)
@@ -829,6 +834,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					preRefreshBootstrapErr = bootstrapErr
 					preRefreshBootstrapHeaders = streamResult.Headers
 					auth = refreshed
+					execCtx = m.observationContextForAuth(execCtx, auth)
 					publishSelectedAuthMetadata(execOpts.Metadata, auth)
 					didRefreshOnUnauthorized = true
 					execCtx = m.newUpstreamAttemptContext(execCtx)
@@ -838,7 +844,8 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 					activeAuth.Store(auth)
 					attemptCtx = startAttempt(execCtx)
 					startRetry := time.Now()
-					retryStream, retryErr := executor.ExecuteStream(attemptCtx, auth, execReq, execOpts)
+					retryAttempt, retryErr := transient.stream(&attemptCtx, &executionSeq, auth, execReq, execOpts, executor)
+					retryStream := retryAttempt.result
 					syncActiveAuth()
 					retryErr = markUpstreamExecutionAttemptFromContext(attemptCtx, retryErr)
 					retryStream, retryErr = validateStreamResult(retryStream, retryErr)
@@ -854,7 +861,7 @@ func (m *Manager) executeStreamWithModelPool(ctx context.Context, executor Provi
 						streamResult = &cliproxyexecutor.StreamResult{}
 					} else {
 						streamResult = retryStream
-						buffered, closed, bootstrapErr = readStreamBootstrap(attemptCtx, streamResult.Chunks)
+						buffered, closed, bootstrapErr = retryAttempt.buffered, retryAttempt.closed, retryAttempt.bootstrapErr
 						bootstrapErr = markUpstreamExecutionAttemptFromContext(attemptCtx, bootstrapErr)
 						if bootstrapErr != nil {
 							abandonAttempt(streamResult)

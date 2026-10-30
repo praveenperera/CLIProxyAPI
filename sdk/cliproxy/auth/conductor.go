@@ -191,6 +191,13 @@ type resultPolicyHolder struct {
 
 // Manager orchestrates auth lifecycle, selection, execution, and persistence.
 type Manager struct {
+	affinityMu      sync.Mutex
+	affinityRuntime *affinityRuntime
+	// cacheUsage aggregates prompt cache outcomes per credential and session
+	cacheUsage *cacheUsage
+	// sessionBindings saves session affinity bindings in the quota affinity state directory
+	sessionBindings *sessionBindingsStore
+
 	inFlightTracker           *inFlightTracker
 	store                     Store
 	cooldownStore             CooldownStateStore
@@ -232,6 +239,8 @@ type Manager struct {
 
 	// Retry controls request retry behavior.
 	requestRetry        atomic.Int32
+	transientRetries    atomic.Int32
+	transientRetryWait  func(context.Context, time.Duration) error
 	maxRetryCredentials atomic.Int32
 	maxRetryInterval    atomic.Int64
 
@@ -300,7 +309,10 @@ func NewManager(store Store, selector Selector, hook Hook) *Manager {
 		homePrepareFlights:    make(map[string]*homeAuthPrepareFlight),
 		providerOffsets:       make(map[string]int),
 		modelPoolOffsets:      make(map[string]int),
+		cacheUsage:            newCacheUsage(time.Now),
 	}
+	manager.sessionBindings = newSessionBindingsStore(manager.sessionAffinityCache)
+	manager.bindSelectorQuota(selector)
 	// atomic.Value requires non-nil initial value.
 	manager.runtimeConfig.Store(&internalconfig.Config{})
 	manager.apiKeyModelRouting.Store(&apiKeyModelRoutingSnapshot{config: &internalconfig.Config{}})

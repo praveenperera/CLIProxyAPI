@@ -22,6 +22,9 @@ import (
 )
 
 func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (_ *cliproxyexecutor.StreamResult, err error) {
+	if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+		return e.executeStreamNative(ctx, auth, req, opts)
+	}
 	ctx = helps.EnsureSessionContext(ctx, opts, req.Payload)
 	if errExpand := expandClaudeResponsesCompaction(&req, &opts); errExpand != nil {
 		return nil, statusErr{code: http.StatusBadRequest, msg: errExpand.Error()}
@@ -410,16 +413,22 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			var upstreamMessageID string
 			var upstreamStreamErr error
 			upstreamCompleted := false
+			var overload helps.ClaudeLeadingOverloadGuard
 			flushEvent := func() bool {
 				if event.Len() == 0 {
 					return true
 				}
 				observeClaudeSSEEvent(event.Bytes(), &upstreamMessageID, &upstreamCompleted, &upstreamStreamErr)
 				streamUsage.ObserveClaudeSSEEvent(event.Bytes())
+				if overload.Drop(event.Bytes(), upstreamStreamErr) {
+					event.Reset()
+					return true
+				}
 				cloned := bytes.Clone(event.Bytes())
 				event.Reset()
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: cloned}:
+					overload.Sent()
 					return true
 				case <-ctx.Done():
 					return false
@@ -429,6 +438,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				line := scanner.Bytes()
 				helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 				reporter.ObserveResponseModel(line)
+				reporter.ObserveInputTransformations(line)
 				streamUsage.ObserveClaudeStream(line)
 				restoredLine, errRestore := restoreClaudeOAuthToolNamesFromStreamLine(line, oauthToolNamesReverseMap)
 				if errRestore != nil {
@@ -502,6 +512,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			}
 			helps.AppendAPIResponseChunk(ctx, e.cfg, line)
 			reporter.ObserveResponseModel(line)
+			reporter.ObserveInputTransformations(line)
 			streamUsage.ObserveClaudeStream(line)
 			restoredLine, errRestore := restoreClaudeOAuthToolNamesFromStreamLine(line, oauthToolNamesReverseMap)
 			if errRestore != nil {

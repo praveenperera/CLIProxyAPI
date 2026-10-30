@@ -34,6 +34,7 @@ func (s *Server) registerManagementV8Routes() {
 	v8.GET("/routing/model-definitions/:channel", s.mgmt.GetStaticModelDefinitions)
 	v8.POST("/routing/model-definitions/refresh", s.mgmt.RefreshModelDefinitions)
 	v8.POST("/models/refresh", s.mgmt.RefreshModelDefinitions)
+	v8.GET("/quota/history", s.mgmt.GetQuotaHistory)
 
 	v8.GET("/observability/logs", s.mgmt.GetLogs)
 	v8.DELETE("/observability/logs", s.mgmt.DeleteLogs)
@@ -43,6 +44,7 @@ func (s *Server) registerManagementV8Routes() {
 	v8.GET("/observability/usage/api-keys", s.mgmt.GetAPIKeyUsage)
 	v8.GET("/observability/usage/queue", s.mgmt.GetUsageQueue)
 	v8.GET("/observability/requests/in-flight", s.mgmt.GetInFlightRequests)
+	v8.GET("/observability/usage/cache", s.mgmt.GetCacheUsage)
 
 	v8.GET("/credentials", s.mgmt.ListAuthFiles)
 	v8.POST("/credentials", s.mgmt.UploadAuthFileV8)

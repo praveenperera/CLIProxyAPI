@@ -285,6 +285,8 @@ func (a *CodexAuthenticator) buildAuthRecord(authSvc *codex.CodexAuth, authBundl
 		"email":     tokenStorage.Email,
 		"plan_type": planType,
 	}
+	metadata["account_id"] = tokenStorage.AccountID
+	metadata["oauth_provenance"] = tokenStorage.OAuthProvenance
 
 	fmt.Println("Codex authentication successful")
 	if authBundle.APIKey != "" {

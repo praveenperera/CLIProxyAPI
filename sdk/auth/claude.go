@@ -204,6 +204,7 @@ waitForCallback:
 	metadata := map[string]any{
 		"email": tokenStorage.Email,
 	}
+	metadata["oauth_provenance"] = tokenStorage.OAuthProvenance
 	if tokenStorage.AccountUUID != "" {
 		metadata["account_uuid"] = tokenStorage.AccountUUID
 	}

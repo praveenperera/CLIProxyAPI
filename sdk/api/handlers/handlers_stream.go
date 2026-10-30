@@ -9,6 +9,7 @@ import (
 	"github.com/MoeForge/moego/json"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
@@ -161,8 +162,8 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 	passthroughHeadersEnabled := executionPassthroughHeaders(h.CurrentConfig(), execOptions.InternalSource)
 	interceptorHost := h.interceptorHost()
 	streamInterceptorsActive := streamInterceptorsEnabled(interceptorHost)
-	rawStreamHeaders := cloneHeader(streamResult.Headers)
-	baseStreamHeaders := cloneHeader(streamResult.Headers)
+	rawStreamHeaders := affinity.StripHeaders(streamResult.Headers)
+	baseStreamHeaders := affinity.StripHeaders(streamResult.Headers)
 	// Request headers and request bodies are stream-invariant. Keep a private snapshot
 	// and clone into each interceptor call so plugins cannot mutate shared storage.
 	// Schema v3+ payload chunks omit these bodies (host also strips per plugin).
@@ -217,6 +218,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 		var completionErr error
 		var streamUsage helps.StreamUsageBuffer
 		defer func() {
+			completionOutcome, completionStatus, completionErr = settleCancelRace(ctx, completionOutcome, completionStatus, completionErr)
 			completionOutcome, completionStatus, completionErr = streamDeliveryCompletion(ctx, completionOutcome, completionStatus, completionErr)
 			lifecycle.complete(completionOutcome, completionStatus, completionErr)
 			if reporter != nil && !nestedTracker.hasNestedExecution() {
@@ -341,7 +343,7 @@ func (h *BaseAPIHandler) streamWithPluginExecutor(ctx context.Context, entryProt
 			}
 		}
 	}()
-	return dataChan, upstreamHeaders, errChan
+	return dataChan, localChatHeaders(upstreamHeaders, ctx), errChan
 }
 
 func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handlerType, modelName string, rawJSON []byte, alt string, allowImageModel bool) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
@@ -349,6 +351,10 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 }
 
 func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context, entryProtocol, exitProtocol, modelName string, rawJSON []byte, alt string, allowImageModel bool, execOptions modelExecutionOptions) (<-chan []byte, http.Header, <-chan *interfaces.ErrorMessage) {
+	ctx, chatErrs := h.prepareChatStream(ctx)
+	if chatErrs != nil {
+		return nil, nil, chatErrs
+	}
 	originalRequestedModel := modelName
 	// Speech-only models are reachable solely through the speech entry protocol.
 	execOptions.AllowSpeechModel = isModelExecutionSpeechProtocol(entryProtocol)
@@ -362,6 +368,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		errChan <- errMsg
 		close(errChan)
 		return nil, nil, errChan
+	}
+	if chatErrs = strictRouteStream(ctx, routeDecision.ExecutorPluginID); chatErrs != nil {
+		return nil, nil, chatErrs
 	}
 	if routeDecision.ExecutorPluginID != "" {
 		return h.streamWithPluginExecutor(ctx, entryProtocol, responseProtocol, modelName, originalRequestedModel, rawJSON, alt, routeDecision.ExecutorPluginID, execOptions)
@@ -424,6 +433,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		return nil, nil, errChan
 	}
 	ctx = coreauth.WithRequestContinuitySession(enrichContextWithSessionHierarchy(ctx, opts.Headers, req.Payload, opts.Metadata))
+	opts = chatOptions(ctx, opts)
 	streamResult, err := h.AuthManager.ExecuteStream(ctx, providers, req, opts)
 	if err != nil {
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
@@ -453,8 +463,8 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	streamInterceptorsActive := streamInterceptorsEnabled(interceptorHost)
 	// Resolve bootstrap retries and header initialization before returning so the
 	// returned header snapshot is never modified by the stream goroutine.
-	rawStreamHeaders := cloneHeader(streamResult.Headers)
-	baseStreamHeaders := cloneHeader(streamResult.Headers)
+	rawStreamHeaders := affinity.StripHeaders(streamResult.Headers)
+	baseStreamHeaders := affinity.StripHeaders(streamResult.Headers)
 	chunks := streamResult.Chunks
 	if chunks == nil {
 		closed := make(chan coreexecutor.StreamChunk)
@@ -592,6 +602,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	}
 
 	bootstrapEligible := func(err error) bool {
+		if strictChat(ctx) {
+			return false
+		}
 		if coreauth.IsContinuityTerminatedError(err) ||
 			coreauth.IsRequestStopError(err) ||
 			coreauth.IsTOSViolationError(err) {
@@ -682,6 +695,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 		completionStatus := http.StatusOK
 		var completionErr error
 		defer func() {
+			completionOutcome, completionStatus, completionErr = settleCancelRace(ctx, completionOutcome, completionStatus, completionErr)
 			completionOutcome, completionStatus, completionErr = streamDeliveryCompletion(ctx, completionOutcome, completionStatus, completionErr)
 			lifecycle.complete(completionOutcome, completionStatus, completionErr)
 		}()
@@ -805,7 +819,7 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 			}
 		}
 	}()
-	return dataChan, upstreamHeaders, errChan
+	return dataChan, localChatHeaders(upstreamHeaders, ctx), errChan
 }
 
 type sseJSONValidationState struct {

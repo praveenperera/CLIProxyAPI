@@ -16,6 +16,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/auth/copilot"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
 )
@@ -74,7 +75,7 @@ func (m *Manager) PluginSchedulerWantsAcrossPriorities() bool {
 
 func isBuiltInSelector(selector Selector) bool {
 	switch selector.(type) {
-	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector:
+	case *RoundRobinSelector, *WeightedRoundRobinSelector, *FillFirstSelector, *OrderedSelector:
 		return true
 	default:
 		return false
@@ -775,6 +776,7 @@ func (m *Manager) SetSelector(selector Selector) {
 		m.mu.Unlock()
 		return
 	}
+	m.prepareSelectorSwap(selector, oldSelector)
 	m.selector = selector
 	m.mu.Unlock()
 
@@ -977,8 +979,9 @@ func (m *Manager) availableAuthsForSelector(ctx context.Context, selector Select
 		// scheduler predicate does, including when only a lower tier has weight.
 		auths = positiveWeightAuths(auths)
 	}
+	_, allPriorities := selector.(allPrioritySelector)
 
-	if !sessionAffinity && !schedulerAcross {
+	if !sessionAffinity && !allPriorities && !schedulerAcross {
 		priorityAuths, err = m.availableAuthsForRouteModelForRequest(ctx, auths, provider, routeModel, now, false, clientHeaders...)
 		if err != nil {
 			return nil, nil, err
@@ -1004,7 +1007,7 @@ func (m *Manager) availableAuthsForSelector(ctx context.Context, selector Select
 	if sessionAffinity {
 		selectorAuths = allAuths
 	} else {
-		selectorAuths = highestPriorityAuths(allAuths)
+		selectorAuths = selectorCandidates(selector, allAuths)
 	}
 	return priorityAuths, selectorAuths, nil
 }
@@ -1857,6 +1860,9 @@ func (m *Manager) shouldRetryAfterErrorWithHomeRetryLimit(ctx context.Context, o
 }
 
 func (m *Manager) shouldRetryAfterErrorWithAttempted(ctx context.Context, opts cliproxyexecutor.Options, err error, attempt int, providers []string, model string, maxWait time.Duration, homeRetryLimit int, defaultRequestRetry int, attempted map[string]struct{}) (time.Duration, bool) {
+	if _, strict := ctx.Value(affinityPinKey{}).(affinityPin); strict {
+		return 0, false
+	}
 	if err == nil {
 		return 0, false
 	}
@@ -2254,7 +2260,7 @@ func (m *Manager) useSchedulerFastPath() bool {
 	if m == nil || m.scheduler == nil {
 		return false
 	}
-	return isBuiltInSelector(m.Selector())
+	return schedulerServesSelector(m.Selector())
 }
 
 func shouldRetrySchedulerPick(err error) bool {
@@ -2529,6 +2535,9 @@ func (m *Manager) SelectAuth(ctx context.Context, provider, model string, opts c
 // SelectAuthExcluding selects one credential through the configured scheduling strategy
 // while excluding any credential IDs present in tried.
 func (m *Manager) SelectAuthExcluding(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, error) {
+	if opts.Affinity.Intent() != affinity.Legacy {
+		return nil, affinity.NewError(affinity.RouteUnsupported, time.Time{})
+	}
 	if m != nil && m.HomeEnabled() {
 		return nil, &Error{Code: "home_unavailable", Message: "legacy auth selection is unavailable while Home is enabled", HTTPStatus: http.StatusServiceUnavailable}
 	}
@@ -2553,6 +2562,9 @@ func (m *Manager) MaxRetryCredentials() int {
 // SelectAuthByKind selects one credential of the required kind through the
 // configured scheduling strategy. Credentials of other kinds are skipped.
 func (m *Manager) SelectAuthByKind(ctx context.Context, provider, model, requiredKind string, opts cliproxyexecutor.Options) (*Auth, error) {
+	if opts.Affinity.Intent() != affinity.Legacy {
+		return nil, affinity.NewError(affinity.RouteUnsupported, time.Time{})
+	}
 	if m != nil && m.HomeEnabled() {
 		return nil, &Error{Code: "home_unavailable", Message: "legacy auth selection is unavailable while Home is enabled", HTTPStatus: http.StatusServiceUnavailable}
 	}
@@ -2577,6 +2589,9 @@ func (m *Manager) SelectAuthByKind(ctx context.Context, provider, model, require
 
 // SelectAuthWithCredentialPolicy selects one local credential allowed by a fixed policy.
 func (m *Manager) SelectAuthWithCredentialPolicy(ctx context.Context, provider, model, policy string, opts cliproxyexecutor.Options) (*Auth, error) {
+	if opts.Affinity.Intent() != affinity.Legacy {
+		return nil, affinity.NewError(affinity.RouteUnsupported, time.Time{})
+	}
 	if m != nil && m.HomeEnabled() {
 		return nil, &Error{Code: "home_unavailable", Message: "legacy auth selection is unavailable while Home is enabled", HTTPStatus: http.StatusServiceUnavailable}
 	}
@@ -2603,6 +2618,9 @@ func (m *Manager) SelectAuthWithCredentialPolicy(ctx context.Context, provider, 
 
 // SelectHomeAuthWithCredentialPolicy selects a policy-constrained Home dispatch while retaining its execution scope.
 func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provider, model, policy string, opts cliproxyexecutor.Options) (*HomeDispatchSelection, error) {
+	if opts.Affinity.Intent() != affinity.Legacy {
+		return nil, affinity.NewError(affinity.RouteUnsupported, time.Time{})
+	}
 	policy = normalizeCredentialPolicy(policy)
 	if policy == "" {
 		return nil, &Error{Code: "invalid_credential_policy", Message: "credential policy is invalid", HTTPStatus: http.StatusBadRequest}
@@ -2653,6 +2671,9 @@ func (m *Manager) SelectHomeAuthWithCredentialPolicy(ctx context.Context, provid
 
 // SelectHomeAuthByKind selects a Home dispatch while retaining its execution scope.
 func (m *Manager) SelectHomeAuthByKind(ctx context.Context, provider string, model string, requiredKind string, opts cliproxyexecutor.Options) (*HomeDispatchSelection, error) {
+	if opts.Affinity.Intent() != affinity.Legacy {
+		return nil, affinity.NewError(affinity.RouteUnsupported, time.Time{})
+	}
 	requiredKind = normalizeAuthKind(requiredKind)
 	if requiredKind == "" {
 		return nil, &Error{Code: "invalid_auth_kind", Message: "required auth kind is invalid", HTTPStatus: http.StatusBadRequest}
@@ -3042,6 +3063,9 @@ func (m *Manager) pickNextMixedLegacy(ctx context.Context, providers []string, m
 }
 
 func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, string, error) {
+	if pin, ok := ctx.Value(affinityPinKey{}).(affinityPin); ok {
+		return m.pickAffinity(ctx, pin, model, opts, tried)
+	}
 	opts.EnsureMetadata()
 	clearSchedulerSelectionID(opts.Metadata)
 	if m.HomeEnabled() {

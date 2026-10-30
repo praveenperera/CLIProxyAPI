@@ -25,6 +25,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 	cliproxysession "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/session"
 	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
@@ -268,6 +269,10 @@ func roundPickFailureError(lastErr, upstreamErr, errPick error) error {
 }
 
 func preferredExecutionAttemptError(fallback, upstream error) error {
+	var local *affinity.Error
+	if errors.As(fallback, &local) {
+		return fallback
+	}
 	if errors.Is(fallback, context.Canceled) || errors.Is(fallback, context.DeadlineExceeded) || isSessionAffinityRetryError(fallback) {
 		return fallback
 	}
@@ -336,7 +341,7 @@ func isOpenAIImageExecutionOptions(opts cliproxyexecutor.Options) bool {
 	return strings.EqualFold(strings.TrimSpace(opts.SourceFormat.String()), "openai-image")
 }
 
-func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (m *Manager) executeLegacy(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	scope := m.beginInFlight("")
 	defer func() { scope.end() }()
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
@@ -392,7 +397,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 			continuitySession.priorAttemptSeen = true
 			return resp, nil
 		}
-		if isTerminalRequestStopError(errExec) {
+		if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve || isTerminalRequestStopError(errExec) {
 			return cliproxyexecutor.Response{}, unwrapExecutionBoundaryError(errExec)
 		}
 		if isCredentialTerminatedError(errExec) {
@@ -517,7 +522,7 @@ func (m *Manager) Execute(ctx context.Context, providers []string, req cliproxye
 }
 
 // It supports multiple providers for the same model and round-robins the starting provider per model.
-func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+func (m *Manager) executeCountLegacy(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
 	scope := m.beginInFlight("")
 	defer func() { scope.end() }()
 	ctx = cliproxyexecutor.WithRequestProxyURL(ctx, opts.ProxyURL)
@@ -548,7 +553,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 		if errExec == nil {
 			return resp, nil
 		}
-		if isTerminalRequestStopError(errExec) {
+		if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve || isTerminalRequestStopError(errExec) {
 			return cliproxyexecutor.Response{}, unwrapExecutionBoundaryError(errExec)
 		}
 		if isCredentialTerminatedError(errExec) {
@@ -593,7 +598,7 @@ func (m *Manager) ExecuteCount(ctx context.Context, providers []string, req clip
 
 // ExecuteStream performs a streaming execution using the configured selector and executor.
 // It supports multiple providers for the same model and round-robins the starting provider per model.
-func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (result *cliproxyexecutor.StreamResult, err error) {
+func (m *Manager) executeStreamLegacy(ctx context.Context, providers []string, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (result *cliproxyexecutor.StreamResult, err error) {
 	scope := m.beginInFlight("")
 	defer func() {
 		if scope != nil {
@@ -707,6 +712,9 @@ func (m *Manager) ExecuteStream(ctx context.Context, providers []string, req cli
 		}
 		retryRoundPending = false
 		retryRoundWaited = false
+		if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+			return nil, unwrapExecutionBoundaryError(errStream)
+		}
 		if isCredentialTerminatedError(errStream) {
 			if preferredUpstreamErr == nil {
 				return nil, unwrapExecutionBoundaryError(errStream)
@@ -936,7 +944,11 @@ func prepareRequestAfterAuth(ctx context.Context, executor ProviderExecutor, aut
 	if opts.RequestAfterAuthInterceptor == nil {
 		return req, opts, nil
 	}
+	if !opts.RequestHooksAllowed() {
+		return req, opts, affinity.NewError(affinity.PrefixTransformUnsupported, time.Time{})
+	}
 	toFormat := requestToFormat(provider, executor, req, opts)
+	interceptorBody := req.Payload
 	resp := opts.RequestAfterAuthInterceptor(ctx, cliproxyexecutor.RequestAfterAuthInterceptRequest{
 		SourceFormat:   opts.SourceFormat,
 		ToFormat:       toFormat,
@@ -944,11 +956,11 @@ func prepareRequestAfterAuth(ctx context.Context, executor ProviderExecutor, aut
 		RequestedModel: requestedModel,
 		Stream:         opts.Stream,
 		Headers:        cloneRequestHeaders(opts.Headers),
-		Body:           req.Payload,
+		Body:           interceptorBody,
 		Metadata:       maps.Clone(opts.Metadata),
 	})
 	prevHeaders := opts.Headers
-	opts.Headers = mergeRequestHeaders(opts.Headers, resp.Headers, resp.ClearHeaders)
+	opts.Headers = affinity.StripHeaders(mergeRequestHeaders(opts.Headers, resp.Headers, resp.ClearHeaders))
 	if len(resp.Body) > 0 {
 		req.Payload = resp.Body
 		opts.OriginalRequest = resp.Body
@@ -1304,7 +1316,10 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		if homeMode {
 			syncPublishedSelectedAuthMetadata(pickOpts.Metadata, opts.Metadata)
 		}
-		preparedAuth, errPrepare := m.prepareRequestAuth(execCtx, executor, auth)
+		preparedAuth, errPrepare := m.prepareAuthForOpts(execCtx, executor, auth, req, opts, routeModel, models, routing)
+		if errPrepare != nil && opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+			return cliproxyexecutor.Response{}, errPrepare
+		}
 		if errPrepare != nil {
 			if preparedAuth != nil {
 				auth = preparedAuth
@@ -1344,6 +1359,7 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		if preparedAuth != nil {
 			auth = preparedAuth
 		}
+		execCtx = m.observationContextForAuth(execCtx, auth)
 		executor = executorForAuth(executor, auth)
 		var authErr error
 		didRefreshOnUnauthorized := false
@@ -1407,7 +1423,8 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			executionSeq := m.nextExecutionSeq()
 			startExec := time.Now()
 			var preRefreshExecErr error
-			resp, errExec := executor.Execute(execCtx, auth, execReq, execOpts)
+			transient := m.newTransientRetry()
+			resp, errExec := transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.Execute)
 			syncActiveAuth()
 			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 			durationExec := time.Since(startExec)
@@ -1422,12 +1439,13 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					auth = refreshed
 					activeAuth.Store(auth)
 					publishSelectedAuthMetadata(execOpts.Metadata, auth)
+					execCtx = m.observationContextForAuth(execCtx, auth)
 					didRefreshOnUnauthorized = true
 					execCtx = refreshExecCtx(withUpstreamAttemptProvider(m.newUpstreamAttemptContext(execCtx), provider))
 					execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 					executionSeq = m.nextExecutionSeq()
 					startRetry := time.Now()
-					resp, errExec = executor.Execute(execCtx, auth, execReq, execOpts)
+					resp, errExec = transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.Execute)
 					syncActiveAuth()
 					errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 					durationRetry := time.Since(startRetry)
@@ -1471,6 +1489,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 					syncPreferredUpstreamError(&upstreamErr, preRefreshExecErr)
 				}
 				if isRequestStopError(errExec) {
+					return cliproxyexecutor.Response{}, errExec
+				}
+				if execOpts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
 					return cliproxyexecutor.Response{}, errExec
 				}
 				if okAction {
@@ -1605,7 +1626,10 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		if homeMode {
 			syncPublishedSelectedAuthMetadata(pickOpts.Metadata, opts.Metadata)
 		}
-		preparedAuth, errPrepare := m.prepareRequestAuth(execCtx, executor, auth)
+		preparedAuth, errPrepare := m.prepareAuthForOpts(execCtx, executor, auth, req, opts, routeModel, models, routing)
+		if errPrepare != nil && opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+			return cliproxyexecutor.Response{}, errPrepare
+		}
 		if errPrepare != nil {
 			if preparedAuth != nil {
 				auth = preparedAuth
@@ -1645,6 +1669,7 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		if preparedAuth != nil {
 			auth = preparedAuth
 		}
+		execCtx = m.observationContextForAuth(execCtx, auth)
 		executor = executorForAuth(executor, auth)
 		var authErr error
 		didRefreshOnUnauthorized := false
@@ -1708,7 +1733,8 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			executionSeq := m.nextExecutionSeq()
 			startExec := time.Now()
 			var preRefreshExecErr error
-			resp, errExec := executor.CountTokens(execCtx, auth, execReq, execOpts)
+			transient := m.newTransientRetry()
+			resp, errExec := transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.CountTokens)
 			syncActiveAuth()
 			errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 			durationExec := time.Since(startExec)
@@ -1723,12 +1749,13 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 					auth = refreshed
 					activeAuth.Store(auth)
 					publishSelectedAuthMetadata(execOpts.Metadata, auth)
+					execCtx = m.observationContextForAuth(execCtx, auth)
 					didRefreshOnUnauthorized = true
 					execCtx = refreshExecCtx(m.newUpstreamAttemptContext(execCtx))
 					execCtx = syncMetadataSessionToContext(execCtx, execOpts.Metadata)
 					executionSeq = m.nextExecutionSeq()
 					startRetry := time.Now()
-					resp, errExec = executor.CountTokens(execCtx, auth, execReq, execOpts)
+					resp, errExec = transient.response(&execCtx, &executionSeq, auth, execReq, execOpts, executor.CountTokens)
 					syncActiveAuth()
 					errExec = markUpstreamExecutionAttemptFromContext(execCtx, errExec)
 					durationRetry := time.Since(startRetry)
@@ -1777,6 +1804,9 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 					syncPreferredUpstreamError(&upstreamErr, preRefreshExecErr)
 				}
 				if isRequestStopError(errExec) {
+					return cliproxyexecutor.Response{}, errExec
+				}
+				if execOpts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
 					return cliproxyexecutor.Response{}, errExec
 				}
 				if okAction {
@@ -2066,8 +2096,8 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		var errPrepare error
 		if selection != nil {
 			preparedAuth, errPrepare = m.prepareHomeRequestAuth(execCtx, executor, selection)
-		} else {
-			preparedAuth, errPrepare = m.prepareRequestAuth(execCtx, executor, auth)
+		} else if preparedAuth, errPrepare = m.prepareAuthForOpts(execCtx, executor, auth, req, opts, routeModel, models, routing); errPrepare != nil && opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+			return nil, errPrepare
 		}
 		if errPrepare != nil {
 			if preparedAuth != nil {
@@ -2250,6 +2280,9 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			}
 			if errCtx := execCtx.Err(); errCtx != nil && ctx != nil && ctx.Err() != nil {
 				return nil, errCtx
+			}
+			if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+				return nil, errStream
 			}
 			lastErr = keepPreferredCandidateError(lastErr, errStream)
 			if homeMode {

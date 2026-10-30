@@ -26,7 +26,7 @@ func (e *CodexWebsocketsExecutor) prepareSessionInstructions(ctx context.Context
 	if auth != nil {
 		authID = auth.ID
 	}
-	conn, _ := existingWebsocketSessionConn(sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC)
+	conn, _ := existingWebsocketSessionConn(ctx, sess, authID, wsURL, executionProxyURL(ctx, sess.effectiveConfig(authID, e.cfg), auth), useSIWC)
 	return helps.PrepareCodexSessionInstructions(ctx, doc, req, opts, &sess.sessionInstructions, conn, false)
 }
 

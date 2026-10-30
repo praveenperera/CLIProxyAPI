@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
@@ -26,6 +27,7 @@ type CodexWebsocketsExecutor struct {
 	*CodexExecutor
 
 	store *codexWebsocketSessionStore
+	now   func() time.Time
 
 	// Set before execution by concurrency tests; never mutated during a session.
 	duplexStateObserver func(event string, ready bool)
@@ -280,7 +282,7 @@ func (e *CodexWebsocketsExecutor) InterruptExecutionSession(ctx context.Context,
 			return errMarker
 		}
 	}
-	if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
+	if errWrite := writeCodexWebsocketMessageContext(ctx, sess, conn, payload); errWrite != nil {
 		return errWrite
 	}
 	log.WithField("outcome", "forwarded").Debug("codex websockets: response.interrupt handled")

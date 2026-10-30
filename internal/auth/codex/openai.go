@@ -1,5 +1,7 @@
 package codex
 
+import "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 // PKCECodes holds the verification codes for the OAuth2 PKCE (Proof Key for Code Exchange) flow.
 // PKCE is an extension to the Authorization Code flow to prevent CSRF and authorization code injection attacks.
 type PKCECodes struct {
@@ -13,6 +15,8 @@ type PKCECodes struct {
 // CodexTokenData holds the OAuth token information obtained from OpenAI.
 // It includes the ID token, access token, refresh token, and associated user details.
 type CodexTokenData struct {
+	// OAuthProvenance binds the acquired token to its verified account identity
+	OAuthProvenance affinity.OAuthProvenance `json:"oauth_provenance,omitempty"`
 	// IDToken is the JWT ID token containing user claims
 	IDToken string `json:"id_token"`
 	// AccessToken is the OAuth2 access token for API access

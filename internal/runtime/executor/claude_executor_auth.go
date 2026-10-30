@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/runtime/executor/helps"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
@@ -122,6 +124,8 @@ func (e *ClaudeExecutor) PrepareRequestAuth(ctx context.Context, auth *cliproxya
 		claudeauth.StoreMetadataString(&auth.Metadata, claudeAccountProfileCheckedAtKey, time.Now().UTC().Format(time.RFC3339))
 		return auth, nil
 	}
+	provenance, _ := affinity.AcquiredOAuthProvenance("claude", profile.Account.UUID, apiKey)
+	claudeauth.StoreMetadataValue(&auth.Metadata, "oauth_provenance", provenance)
 	claudeauth.StoreMetadataString(&auth.Metadata, "account_uuid", profile.Account.UUID)
 	claudeauth.StoreMetadataString(&auth.Metadata, "email", profile.Account.Email)
 	claudeauth.StoreMetadataString(&auth.Metadata, "organization_uuid", profile.Organization.UUID)
@@ -167,6 +171,7 @@ func (e *ClaudeExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (
 		return nil, err
 	}
 	claudeauth.EnsureMetadataMap(&auth.Metadata)
+	claudeauth.StoreMetadataValue(&auth.Metadata, "oauth_provenance", td.OAuthProvenance)
 	claudeauth.StoreMetadataValue(&auth.Metadata, "access_token", td.AccessToken)
 	claudeauth.StoreMetadataString(&auth.Metadata, "refresh_token", td.RefreshToken)
 	// Profile fields are optional when token rotation succeeds but the follow-up

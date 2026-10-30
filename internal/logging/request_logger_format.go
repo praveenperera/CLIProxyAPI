@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/buildinfo"
@@ -119,6 +121,9 @@ func writeRequestInfoWithBody(
 		return errWrite
 	}
 	for key, values := range headers {
+		if affinity.IsLocalHeader(key) {
+			continue
+		}
 		for _, value := range values {
 			masked := util.MaskSensitiveHeaderValue(key, value)
 			if _, errWrite := io.WriteString(w, fmt.Sprintf("%s: %s\n", key, masked)); errWrite != nil {
@@ -219,6 +224,9 @@ func inferDownstreamTransport(headers map[string][]string, websocketTimeline []b
 		return "websocket"
 	}
 	for key, values := range headers {
+		if affinity.IsLocalHeader(key) {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(key), "Upgrade") {
 			for _, value := range values {
 				if strings.EqualFold(strings.TrimSpace(value), "websocket") {
@@ -413,6 +421,9 @@ func writeResponseSection(w io.Writer, statusCode int, statusWritten bool, respo
 			}
 		}
 		for key, values := range responseHeaders {
+			if affinity.IsLocalHeader(key) {
+				continue
+			}
 			for _, value := range values {
 				if _, errWrite := io.WriteString(w, fmt.Sprintf("%s: %s\n", key, value)); errWrite != nil {
 					return errWrite
@@ -553,6 +564,9 @@ func (l *FileRequestLogger) formatLogContent(url, method string, headers map[str
 		content.WriteString("<none>\n")
 	}
 	for key, values := range responseHeaders {
+		if affinity.IsLocalHeader(key) {
+			continue
+		}
 		for _, value := range values {
 			content.WriteString(fmt.Sprintf("%s: %s\n", key, value))
 		}
@@ -724,6 +738,9 @@ func (l *FileRequestLogger) formatRequestInfo(url, method string, headers map[st
 
 	content.WriteString("=== HEADERS ===\n")
 	for key, values := range headers {
+		if affinity.IsLocalHeader(key) {
+			continue
+		}
 		for _, value := range values {
 			masked := util.MaskSensitiveHeaderValue(key, value)
 			content.WriteString(fmt.Sprintf("%s: %s\n", key, masked))

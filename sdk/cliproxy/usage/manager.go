@@ -80,6 +80,8 @@ type Record struct {
 	Detail      Detail
 	// ResponseHeaders stores a snapshot of upstream response headers for usage sinks.
 	ResponseHeaders http.Header
+	// InputTransformations contains only bounded provider-reported drop counts
+	InputTransformations InputTransformationCounts
 }
 
 // FailureStreamTruncatedCode marks a locally synthesized failure for an
@@ -112,6 +114,9 @@ type Detail struct {
 	CachedTokens        int64
 	CacheReadTokens     int64
 	CacheCreationTokens int64
+	// CacheWrite1hTokens is the part of CacheCreationTokens written to Anthropic's 1-hour
+	// cache, which is billed above the 5-minute rate; zero when the upstream does not say
+	CacheWrite1hTokens  int64
 	TotalTokens         int64
 	TokenBreakdown      TokenBreakdown
 	ResponseServiceTier string
@@ -640,6 +645,8 @@ type Manager struct {
 	once     sync.Once
 	stopOnce sync.Once
 	cancel   context.CancelFunc
+	// done closes when the dispatcher has drained the queue after Stop; nil before Start
+	done chan struct{}
 
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -669,7 +676,7 @@ func (m *Manager) Start(ctx context.Context) {
 		}
 		var workerCtx context.Context
 		workerCtx, m.cancel = context.WithCancel(ctx)
-		go m.run(workerCtx)
+		m.spawnDispatcher(workerCtx)
 	})
 }
 

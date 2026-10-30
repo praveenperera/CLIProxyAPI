@@ -72,6 +72,7 @@ func validateStartupConfig(data []byte, optional bool) (*startupConfig, error) {
 	cfg.DisableCooling = false
 	cfg.SaveCooldownStatus = false
 	cfg.TransientErrorCooldownSeconds = 0
+	cfg.Routing.TransientRetries = 2
 	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.WebsocketAuth = true
 	cfg.Pprof.Enable = false
@@ -101,6 +102,9 @@ func validateStartupConfig(data []byte, optional bool) (*startupConfig, error) {
 		return nil, errValidate
 	}
 	if errValidate := cfg.ValidateCredentialWeights(); errValidate != nil {
+		return nil, errValidate
+	}
+	if errValidate := cfg.finishForkLoad(); errValidate != nil {
 		return nil, errValidate
 	}
 	if errValidate := cfg.Codex.LiveMediaRelay.Validate(); errValidate != nil {

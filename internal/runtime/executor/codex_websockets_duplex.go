@@ -619,7 +619,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 			helps.RecordAPIWebsocketRequest(streamCtx, e.cfg, helps.UpstreamRequestLog{
 				URL: initial.wsURL, Method: "WEBSOCKET", Body: prepared.sessionInstructions.LogBody(payload), Provider: e.Identifier(), AuthID: auth.ID,
 			})
-			if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
+			if errWrite := writeCodexWebsocketMessageContext(streamCtx, sess, conn, payload); errWrite != nil {
 				fail(mapCodexWebsocketWriteError(sess, conn, errWrite))
 				return false
 			}
@@ -764,7 +764,7 @@ func (e *CodexWebsocketsExecutor) streamCodexDuplex(
 					helps.RecordAPIWebsocketRequest(streamCtx, e.cfg, helps.UpstreamRequestLog{
 						URL: initial.wsURL, Method: "WEBSOCKET", Body: payload, Provider: e.Identifier(), AuthID: auth.ID,
 					})
-					if errWrite := writeCodexWebsocketMessage(sess, conn, payload); errWrite != nil {
+					if errWrite := writeCodexWebsocketMessageContext(streamCtx, sess, conn, payload); errWrite != nil {
 						fail(mapCodexWebsocketWriteError(sess, conn, errWrite))
 						return
 					}
