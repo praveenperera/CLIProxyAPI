@@ -10,19 +10,20 @@ set -euo pipefail
 upstream="${1:-origin/main}"
 base="$(git merge-base "$upstream" HEAD)"
 
-# files that exist upstream and that the fork modifies; new files never conflict
-raw="$(git diff --diff-filter=M --numstat "$base" HEAD)"
-nows="$(git diff -w --diff-filter=M --numstat "$base" HEAD)"
+# files that exist upstream and that the fork modifies; new files never conflict. Comparing
+# against the working tree includes staged and unstaged edits, so it works before committing
+raw="$(git diff --diff-filter=M --numstat "$base")"
+nows="$(git diff -w --diff-filter=M --numstat "$base")"
 
 echo "Fork changes in upstream-owned files (vs $(git rev-parse --short "$base"), largest first):"
 printf '%6s %6s  %s\n' "+" "-" "file"
-echo "$raw" | sort -k1,1nr -k2,2nr | awk '{ printf "%6s %6s  %s\n", $1, $2, $3 }'
+echo "$raw" | sort -k1,1nr -k2,2nr | awk 'NF { printf "%6s %6s  %s\n", $1, $2, $3 }'
 
-total() { awk '{ a += $1; d += $2; n++ } END { printf "%d files, +%d -%d", n, a, d }'; }
+total() { awk 'NF { a += $1; d += $2; n++ } END { printf "%d files, +%d -%d", n, a, d }'; }
 echo
 echo "total:             $(echo "$raw" | total)"
 echo "ignoring spacing:  $(echo "$nows" | total)"
-echo "new fork files:    $(git diff --diff-filter=A --name-only "$base" HEAD | wc -l | tr -d ' ')"
+echo "new fork files:    $(git diff --diff-filter=A --name-only "$base" | wc -l | tr -d ' ')"
 
 # a file whose counts drop under -w has reindented or realigned upstream lines; files whose
 # changes are all spacing are missing from the -w list, so they count as zero there
