@@ -46,6 +46,10 @@ func ValidateConfig(config ThinkingConfig, modelInfo *registry.ModelInfo, fromFo
 		support = modelInfo.Thinking
 	}
 
+	if config.Mode == ModeBetweenTools {
+		return validateBetweenTools(config, modelInfo, support, fromFormat, toFormat, model)
+	}
+
 	if support == nil {
 		if config.Mode != ModeNone {
 			return nil, NewThinkingErrorWithModel(ErrThinkingNotSupported, "thinking not supported for this model", model)

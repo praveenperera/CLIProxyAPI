@@ -33,6 +33,8 @@ docs/*
 !docs/management-api-v8.md
 !docs/websocket-tunnel.md
 !docs/websocket-tunnel_CN.md
+!docs/claude-between-tools.md
+!docs/quota-aware-chat-affinity.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md
