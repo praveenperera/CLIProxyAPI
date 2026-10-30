@@ -29,6 +29,7 @@ import (
 )
 
 type UsageReporter struct {
+	inputTransformationState
 	requestID            string
 	traceID              string
 	selectionID          string
@@ -708,6 +709,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		Failed:               failed,
 		Fail:                 fail,
 		Detail:               detail,
+		InputTransformations: r.InputTransformationCounts(),
 	}
 }
 
@@ -2726,6 +2728,7 @@ func parseClaudeUsageNode(usageNode ojson.Result) usage.Detail {
 		CachedTokens:        cacheReadTokens,
 		CacheReadTokens:     cacheReadTokens,
 		CacheCreationTokens: cacheCreationTokens,
+		CacheWrite1hTokens:  usageNode.Get("cache_creation.ephemeral_1h_input_tokens").Int(),
 	}
 	// Anthropic reports the speed a response was served and billed at in
 	// usage.speed ("fast" or "standard"): fast mode costs more, and a

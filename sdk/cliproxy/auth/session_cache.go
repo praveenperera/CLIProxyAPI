@@ -40,6 +40,8 @@ type SessionCache struct {
 	stopOnce         sync.Once
 	sessionGroups    map[string]map[string]struct{}
 	bindingSequence  uint64
+	// changes counts group writes and removals so a saver can skip unchanged snapshots
+	changes uint64
 }
 
 // NewSessionCache creates a cache with the specified TTL.
@@ -65,7 +67,7 @@ func NewSessionCacheWithCapacity(ttl time.Duration, maxEntries int) *SessionCach
 		ttl:              ttl,
 		stopCh:           make(chan struct{}),
 	}
-	go c.cleanupLoop()
+	go c.cleanupLoop(ttl)
 	return c
 }
 
@@ -216,6 +218,7 @@ func (c *SessionCache) replaceAliasGroupsLocked(authID string, expiresAt time.Ti
 	}
 	entry := sessionEntry{authID: authID, expiresAt: expiresAt, aliases: append([]string(nil), aliases...), binding: binding}
 	c.groups[primaryKey] = entry
+	c.changes++
 	if binding.sequence != 0 {
 		if c.sessionGroups[binding.sessionID] == nil {
 			c.sessionGroups[binding.sessionID] = make(map[string]struct{})
@@ -255,6 +258,7 @@ func (c *SessionCache) removeAliasGroupLocked(entry sessionEntry) {
 	primaryKey := entry.aliases[0]
 	if currentGroup, ok := c.groups[primaryKey]; ok && sameSessionEntryGroup(currentGroup, entry) {
 		delete(c.groups, primaryKey)
+		c.changes++
 		if groups := c.sessionGroups[entry.binding.sessionID]; groups != nil {
 			delete(groups, primaryKey)
 			if len(groups) == 0 {
@@ -474,8 +478,10 @@ func (c *SessionCache) Stop() {
 	})
 }
 
-func (c *SessionCache) cleanupLoop() {
-	interval := c.ttl / 2
+// cleanupLoop takes the construction TTL so it never reads ttl while setTTL changes it; the
+// sweep interval only affects how soon expired entries are freed
+func (c *SessionCache) cleanupLoop(ttl time.Duration) {
+	interval := ttl / 2
 	if interval < time.Millisecond {
 		interval = time.Millisecond
 	}

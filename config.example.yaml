@@ -160,11 +160,16 @@ access:
 
 # Routing strategy for selecting credentials when multiple match.
 routing:
-  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first
+  strategy: "round-robin" # round-robin (default), weighted-round-robin, fill-first, ordered
+  # ordered ranks new sessions by the criteria in order, earlier ones first: priority, weekly-reset,
+  # session-reset, weekly-remaining, session-remaining. It ranks every priority tier, and quota
+  # criteria need quota-aware-chat-affinity below for data.
+  # order: ["weekly-reset", "session-remaining", "priority"]
   # weighted-round-robin uses each credential's integer weight (default 1, maximum 1,000,000).
   # Non-positive weights exclude the credential while this strategy is active.
   # For OAuth/file credentials, add a top-level numeric "weight" field to the auth JSON.
-  # Enable universal session-sticky routing for all clients.
+  # Session-sticky routing is always on for all clients, because prompt caches are not shared
+  # across credentials; the strategy above only places new sessions and failover.
   # Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
   # followed by prompt_cache_key, Responses conversation IDs, legacy body IDs,
   # execution or derived session identity, and the existing first-message hash fallback.
@@ -172,8 +177,8 @@ routing:
   # An established binding outranks credential priority: once a session is bound, that
   # credential is kept even if a higher-priority credential recovers. Credential priority
   # still decides cold bindings, requests without a session, and post-failover rebinding.
-  session-affinity: false # default: false
   # How long session-to-auth bindings are retained. Default: 1h
+  # With quota-aware-chat-affinity, bindings are saved in its state-dir and survive restarts
   session-affinity-ttl: "1h"
   # When true (default), subagents (child sessions with parent references) inherit and bind
   # to the parent's upstream credential across all providers (Claude, Codex, Antigravity, Gemini),
@@ -184,15 +189,31 @@ routing:
   # Existing child bindings take precedence. Parent lookups do not extend the parent's TTL.
   # When false, subagents are distributed across the credential pool via the fallback selector
   # for maximum parallel concurrency.
-  # Ignored when routing.session-affinity is false.
   session-affinity-subagents: true
   # Controls which credential failures rebind an established session to the failover credential:
   #   - "any" (default): any credential-attributed failure unbinds and rebinds on failover.
   #   - "quota": transient errors (408, 5xx, empty stream, buffer limit) fail over for that
   #     request only while keeping the session bound to its original credential; quota and auth
   #     errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
-  # Ignored when routing.session-affinity is false.
   session-affinity-rebind-on: "any"
+  # Retry brief upstream failures on the same credential before failover (default: 2 extra attempts)
+  # Wait 1s before the first retry, 2s before the second; 0 disables. Reload takes effect on new attempts
+  transient-retries: 2
+
+  # Optional local durable chat affinity; omit this block to keep legacy HTTP routing
+  # Requires authenticated callers and explicit X-CLIProxy-Chat-* headers
+  # Do not enable with Home or plugins
+  # Strict Claude requires native Messages history; request hooks are rejected
+  # quota-aware-chat-affinity:
+  #   namespace: "local-chats"
+  #   state-dir: "/var/lib/cliproxy/chat-affinity" # outside auth-dir; one server per directory; also keeps 30 days of quota history
+  #   idle-retention: "168h"
+  #   hard-retention: "720h"
+  #   max-bindings: 65536
+  #   max-quota-age: "5m"
+  #   poll-interval: "1m" # a credential whose usage read gets HTTP 429 backs off (15 minutes or 3 intervals, doubling, honoring Retry-After, up to 1h) until a read succeeds
+  #   poll-concurrency: 4
+  #   allow-legacy-requests: false # true lets requests without chat headers (Claude Code, Codex) use the normal strategy
 
   # When true, unprefixed model requests only use credentials without a prefix (except when prefix == model name).
   force-model-prefix: false
@@ -1243,6 +1264,10 @@ observability:
     # The local Redis RESP usage output is disabled.
     # Default: 60. Max: 3600.
     redis-usage-queue-retention-seconds: 60
+
+    # T3 Code's state database. When set, the prompt cache report titles Claude Code and Codex
+    # sessions with their T3 thread title. The file is opened read-only.
+    # t3-state-db: "~/.t3/userdata/statev2.sqlite"
 
   # Enable pprof HTTP debug server (host:port). Keep it bound to localhost for safety.
   pprof:

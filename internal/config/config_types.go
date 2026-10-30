@@ -485,9 +485,17 @@ type QuotaExceeded struct {
 
 // RoutingConfig configures how credentials are selected for requests.
 type RoutingConfig struct {
+	// QuotaAwareChatAffinity enables explicit local chat lifecycle routing
+	QuotaAwareChatAffinity *QuotaAffinityConfig `yaml:"quota-aware-chat-affinity,omitempty" json:"quota-aware-chat-affinity,omitempty"`
+
 	// Strategy selects the credential selection strategy.
-	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first".
+	// Supported values: "round-robin" (default), "weighted-round-robin", "fill-first",
+	// "ordered" (ranks by Order; quota criteria need quota-aware-chat-affinity for data).
 	Strategy string `yaml:"strategy,omitempty" json:"strategy,omitempty"`
+
+	// Order lists the criteria the "ordered" strategy ranks new sessions by, from most to least
+	// important; see RoutingOrderCriteria. Empty uses DefaultRoutingOrder.
+	Order []string `yaml:"order,omitempty" json:"order,omitempty"`
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Explicit Claude Code, Codex, OpenCode, and pi session headers are preferred,
@@ -516,6 +524,10 @@ type RoutingConfig struct {
 	//     auth errors (429, 401/402/403, 404/model support, invalid_grant) rebind as normal.
 	// Ignored when SessionAffinity is false.
 	SessionAffinityRebindOn string `yaml:"session-affinity-rebind-on,omitempty" json:"session-affinity-rebind-on,omitempty"`
+
+	// TransientRetries limits extra same-credential attempts for brief upstream failures
+	// Default: 2, with a linear backoff of one second per retry; zero disables retries
+	TransientRetries int `yaml:"transient-retries" json:"transient-retries"`
 }
 
 // OAuthModelAlias defines a model ID alias for a specific channel.

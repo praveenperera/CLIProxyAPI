@@ -396,6 +396,10 @@ func isKnownDefaultValue(path []string, node *yaml.Node) bool {
 		}
 	}
 
+	if known, ok := forkKnownDefault(path, node); ok {
+		return known
+	}
+
 	// Credential weights and retry overrides are pointer-backed: zero is explicit.
 	if len(path) > 0 && (path[len(path)-1] == "weight" || path[len(path)-1] == "request-retry") && node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!int" {
 		return false

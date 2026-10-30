@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
+
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
@@ -449,10 +451,13 @@ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state stri
 		Expire:           time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
 
+	tokenData.OAuthProvenance, _ = affinity.AcquiredOAuthProvenance("claude", tokenData.AccountUUID, tokenResp.AccessToken)
+
 	// Replay the native login companion lookups and let the profile response win
 	// where it carries identity the token response omitted.
 	if profile := o.inspectOAuthAccount(ctx, tokenResp.AccessToken); profile != nil {
 		if value := strings.TrimSpace(profile.Account.UUID); value != "" {
+			tokenData.OAuthProvenance, _ = affinity.AcquiredOAuthProvenance("claude", value, tokenResp.AccessToken)
 			tokenData.AccountUUID = value
 		}
 		if value := strings.TrimSpace(profile.Account.Email); value != "" {
@@ -595,6 +600,7 @@ func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken
 	}
 	tokenData.Email = profile.Account.Email
 	tokenData.AccountUUID = profile.Account.UUID
+	tokenData.OAuthProvenance, _ = affinity.AcquiredOAuthProvenance("claude", profile.Account.UUID, tokenResp.AccessToken)
 	tokenData.OrganizationUUID = profile.Organization.UUID
 	tokenData.OrganizationName = profile.Organization.Name
 	return tokenData, nil
@@ -611,6 +617,7 @@ func (o *ClaudeAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken
 //   - *ClaudeTokenStorage: A new token storage instance
 func (o *ClaudeAuth) CreateTokenStorage(bundle *ClaudeAuthBundle) *ClaudeTokenStorage {
 	storage := &ClaudeTokenStorage{
+		OAuthProvenance:  bundle.TokenData.OAuthProvenance,
 		AccessToken:      bundle.TokenData.AccessToken,
 		RefreshToken:     bundle.TokenData.RefreshToken,
 		LastRefresh:      bundle.LastRefresh,
@@ -673,6 +680,7 @@ func (o *ClaudeAuth) RefreshTokensWithRetry(ctx context.Context, refreshToken st
 //   - storage: The existing token storage to update
 //   - tokenData: The new token data to apply
 func (o *ClaudeAuth) UpdateTokenStorage(storage *ClaudeTokenStorage, tokenData *ClaudeTokenData) {
+	storage.OAuthProvenance = tokenData.OAuthProvenance
 	storage.AccessToken = tokenData.AccessToken
 	storage.RefreshToken = tokenData.RefreshToken
 	storage.LastRefresh = time.Now().Format(time.RFC3339)

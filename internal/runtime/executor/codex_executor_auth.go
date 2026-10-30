@@ -215,7 +215,7 @@ func (e *CodexExecutor) refreshLocked(ctx context.Context, auth *cliproxyauth.Au
 		if (strings.TrimSpace(diskOuterRef) != "" && strings.TrimSpace(diskOuterRef) != strings.TrimSpace(inOuterRef)) ||
 			(strings.TrimSpace(diskOuterAcc) != "" && strings.TrimSpace(diskOuterAcc) != strings.TrimSpace(inOuterAcc)) {
 			diskRotatedOuter = true
-			for _, key := range []string{"id_token", "access_token", "refresh_token", "account_id", "last_refresh", "email", "expired", "plan_type", "type"} {
+			for _, key := range []string{"id_token", "access_token", "refresh_token", "account_id", "last_refresh", "email", "expired", "plan_type", "type", "oauth_provenance"} {
 				if val, exists := diskMap[key]; exists {
 					auth.Metadata[key] = val
 				}
@@ -383,6 +383,7 @@ func (e *CodexExecutor) refreshLocked(ctx context.Context, auth *cliproxyauth.Au
 				outerErr = errOuter
 			} else if td != nil {
 				outerRefreshed = true
+				auth.Metadata["oauth_provenance"] = td.OAuthProvenance
 				auth.Metadata["id_token"] = td.IDToken
 				auth.Metadata["access_token"] = td.AccessToken
 				if td.RefreshToken != "" {

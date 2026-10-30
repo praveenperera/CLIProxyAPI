@@ -221,6 +221,9 @@ func TestExchangeCodeForTokensUsesNative220ControlPlaneShape(t *testing.T) {
 	if bundle.TokenData.OrganizationUUID != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" || bundle.TokenData.OrganizationName != "Example Org" {
 		t.Fatalf("organization = %q/%q, want the companion profile organization", bundle.TokenData.OrganizationUUID, bundle.TokenData.OrganizationName)
 	}
+	if !bundle.TokenData.OAuthProvenance.Matches("claude", bundle.TokenData.AccountUUID, bundle.TokenData.AccessToken) {
+		t.Fatal("profile acquisition did not bind the token to its account")
+	}
 	if bundle.TokenData.Email != "user@example.com" {
 		t.Fatalf("email = %q, want the companion profile email", bundle.TokenData.Email)
 	}
@@ -255,6 +258,9 @@ func TestExchangeCodeForTokensSurvivesCompanionLookupFailure(t *testing.T) {
 	}
 	if bundle.TokenData.AccountUUID != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || bundle.TokenData.Email != "token@example.com" {
 		t.Fatalf("token-response identity must survive companion failure, got %#v", bundle.TokenData)
+	}
+	if !bundle.TokenData.OAuthProvenance.Matches("claude", bundle.TokenData.AccountUUID, bundle.TokenData.AccessToken) {
+		t.Fatal("authenticated token response did not bind its account")
 	}
 	if bundle.TokenData.OrganizationName != "Token Org" {
 		t.Fatalf("organization = %q, want token-response organization", bundle.TokenData.OrganizationName)

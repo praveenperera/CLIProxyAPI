@@ -226,6 +226,9 @@ func TestRefreshTokens_PlanTypeDefaultsToFreeWhenMissing(t *testing.T) {
 	if tokenData == nil {
 		t.Fatal("tokenData is nil")
 	}
+	if !tokenData.OAuthProvenance.Matches("codex", tokenData.AccountID, tokenData.AccessToken) || tokenData.OAuthProvenance.Matches("codex", tokenData.AccountID, "replacement") {
+		t.Fatal("OAuth acquisition did not bind the token to its account")
+	}
 	if got := tokenData.PlanType; got != "free" {
 		t.Fatalf("tokenData.PlanType = %q, want free", got)
 	}
