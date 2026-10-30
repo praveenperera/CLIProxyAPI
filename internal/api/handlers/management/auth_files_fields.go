@@ -402,6 +402,13 @@ func applyAuthFileFieldsPatch(targetAuth *coreauth.Auth, req map[string]json.Raw
 		if targetAuth.Metadata == nil {
 			targetAuth.Metadata = make(map[string]any)
 		}
+		if handled, errQuota := applyQuotaWeightPatch(targetAuth, fieldPath, value); errQuota != nil {
+			return errQuota
+		} else if handled {
+			touchedRoots["quota_weight"] = struct{}{}
+			changed = true
+			continue
+		}
 
 		if fieldPath == coreauth.AttributeWeight {
 			if value == nil {

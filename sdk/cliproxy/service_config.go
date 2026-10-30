@@ -61,6 +61,11 @@ type routingRuntimeState struct {
 	sessionAffinityTTL       time.Duration
 	sessionAffinitySubagents bool
 	sessionAffinityRebindOn  string
+
+	// order is the ordered strategy's criteria joined by commas, keeping the state comparable
+	order string
+	// quotaPolling reports whether the quota-aware chat affinity profile observes quota
+	quotaPolling bool
 }
 
 func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
@@ -79,8 +84,11 @@ func normalizedRoutingRuntimeState(cfg *config.Config) routingRuntimeState {
 		state.strategy = "weighted-round-robin"
 	case "fill-first", "fillfirst", "ff":
 		state.strategy = "fill-first"
+	case config.RoutingStrategyOrdered:
+		state.strategy, state.order = config.RoutingStrategyOrdered, normalizedRoutingOrder(cfg)
 	}
 	state.sessionAffinity = cfg.Routing.SessionAffinity
+	state.quotaPolling = cfg.Routing.QuotaAwareChatAffinity != nil
 	if ttl := strings.TrimSpace(cfg.Routing.SessionAffinityTTL); ttl != "" {
 		if parsed, errParse := time.ParseDuration(ttl); errParse == nil && parsed > 0 {
 			if parsed < time.Second {
@@ -110,6 +118,8 @@ func newRoutingSelector(state routingRuntimeState) coreauth.Selector {
 		selector = &coreauth.WeightedRoundRobinSelector{}
 	case "fill-first":
 		selector = &coreauth.FillFirstSelector{}
+	case config.RoutingStrategyOrdered:
+		selector = newOrderedSelector(state)
 	default:
 		selector = &coreauth.RoundRobinSelector{}
 	}
@@ -159,6 +169,9 @@ func (s *Service) commitConfigUpdate(newCfg *config.Config) configCommit {
 
 	if errValidate := newCfg.Models.Validate(); errValidate != nil {
 		log.WithError(errValidate).Warn("rejected invalid model catalog sources")
+		return configCommit{}
+	}
+	if !s.validateForkConfig(newCfg) {
 		return configCommit{}
 	}
 	// Clone before assigning the generation: callers may still hold the input snapshot.

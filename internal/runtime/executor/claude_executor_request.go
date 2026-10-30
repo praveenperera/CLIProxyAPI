@@ -1182,6 +1182,7 @@ func applyClaudeHeadersWithNativeProfile(
 	}
 	applyCLIFingerprint := fp.ProfileClaudeCodeCLI || wirePolicy.Cloak
 	preserveCallerFingerprint := !applyCLIFingerprint && !confirmedClaudeCode
+	nativePreserve := helps.NativeFingerprintOverride(r.Context(), &preserveCallerFingerprint, &confirmedClaudeCode)
 	useOAuthBetas := fp.UseOAuthBetas
 	isAnthropicBase := isAnthropicUpstreamURL(r.URL)
 	if strings.TrimSpace(apiKey) != "" {
@@ -1259,7 +1260,7 @@ func applyClaudeHeadersWithNativeProfile(
 	if preserveCallerFingerprint && advisorNeeded {
 		baseBetas = withClaudeAdvisorToolBeta(baseBetas)
 	}
-	if !claudeRequestSupportsEffort(body, nil) {
+	if !nativePreserve && !claudeRequestSupportsEffort(body, nil) {
 		baseBetas = withoutClaudeBeta(baseBetas, claudeEffortBeta)
 	}
 	existingSet := make(map[string]bool)
@@ -1317,6 +1318,9 @@ func applyClaudeHeadersWithNativeProfile(
 		}
 	}
 	applyBetaHeader := func() {
+		if helps.ApplyNativeBetaHeader(nativePreserve, r.Header, baseBetas) {
+			return
+		}
 		if wirePolicy.Uncloak {
 			baseBetas = withoutClaudeBeta(baseBetas, claudeCodeBeta)
 			baseBetas = withoutClaudeBeta(baseBetas, claudeOAuthBeta)
@@ -1437,7 +1441,7 @@ func applyClaudeHeadersWithNativeProfile(
 			resetHeader("Accept", defaultAccept)
 			resetHeader("Accept-Encoding", defaultAcceptEncoding)
 		}
-		if isAnthropicBase {
+		if isAnthropicBase || nativePreserve {
 			applyBetaHeader()
 			restoreCallerTransport()
 		} else if stream {

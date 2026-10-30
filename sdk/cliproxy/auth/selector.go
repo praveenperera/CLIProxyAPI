@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MoeForge/moego/ojson"
@@ -450,7 +451,7 @@ func preferCodexWebsocketAuths(ctx context.Context, provider string, available [
 	if !cliproxyexecutor.DownstreamWebsocket(ctx) {
 		return available
 	}
-	if !strings.EqualFold(strings.TrimSpace(provider), "codex") {
+	if !strings.EqualFold(strings.TrimSpace(provider), "codex") && (provider != "mixed" || !allCodexAuths(available)) {
 		return available
 	}
 
@@ -936,9 +937,12 @@ type SessionAffinitySelector struct {
 	fallback          Selector
 	cache             *SessionCache
 	matcher           *cliproxysession.MerklePrefixMatcher
+	ttl               time.Duration
 	subagentAffinity  bool
 	rebindOnQuotaOnly bool
 	rebindOnNever     bool
+	// handedOff is set once a replacement selector adopted the bindings, so Stop keeps them
+	handedOff atomic.Bool
 }
 
 const (
@@ -1127,6 +1131,7 @@ func NewSessionAffinitySelectorWithConfig(cfg SessionAffinityConfig) *SessionAff
 		fallback:          cfg.Fallback,
 		cache:             NewSessionCache(cfg.TTL),
 		matcher:           cliproxysession.NewMerklePrefixMatcher(cfg.TTL),
+		ttl:               cfg.TTL,
 		subagentAffinity:  subagentAffinity,
 		rebindOnQuotaOnly: rebindMode == SessionAffinityRebindOnQuota,
 		rebindOnNever:     rebindMode == SessionAffinityRebindOnNever,
@@ -1201,21 +1206,23 @@ func (s *SessionAffinitySelector) Pick(ctx context.Context, provider, model stri
 		availabilityCandidates = positiveWeightAuths(auths)
 	}
 	if primaryID == "" {
-		fallbackAuths, errAvailable := getSelectorAvailableAuths(ctx, availabilityCandidates, provider, model, now)
+		available, errAvailable := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, now)
 		if errAvailable != nil {
 			return nil, errAvailable
 		}
+		fallbackAuths := selectorCandidates(s.fallback, available)
 		entry.Debugf("session-affinity: no session ID extracted, falling back to default selector | provider=%s model=%s", provider, model)
 		return s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
 	}
 
 	// A single availability pass serves both lookups: the bound credential is validated against
-	// every priority tier, while the fallback selector keeps seeing only the highest tier.
+	// every priority tier, while the fallback selector keeps seeing only the highest tier unless
+	// it ranks priority itself.
 	available, err := getSelectorAvailableAuthsAcrossPriorities(ctx, availabilityCandidates, provider, model, now)
 	if err != nil && !s.rebindOnNever {
 		return nil, err
 	}
-	fallbackAuths := highestPriorityAuths(available)
+	fallbackAuths := selectorCandidates(s.fallback, available)
 
 	modelKey := canonicalModelKey(model)
 	cacheKey := provider + "::" + primaryID + "::" + modelKey
@@ -1475,7 +1482,7 @@ func (s *SessionAffinitySelector) pickLCP(ctx context.Context, provider, model s
 	if errAvailable != nil {
 		return nil, true, errAvailable
 	}
-	fallbackAuths := highestPriorityAuths(available)
+	fallbackAuths := selectorCandidates(s.fallback, available)
 	auth, errPick := s.fallback.Pick(ctx, provider, model, opts, fallbackAuths)
 	if errPick != nil {
 		return nil, true, errPick
@@ -1635,7 +1642,7 @@ func truncateSessionID(id string) string {
 
 // Stop releases resources held by the selector.
 func (s *SessionAffinitySelector) Stop() {
-	if s == nil {
+	if s == nil || s.handedOff.Load() {
 		return
 	}
 	if s.cache != nil {

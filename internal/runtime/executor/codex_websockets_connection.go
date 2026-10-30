@@ -32,6 +32,10 @@ const (
 )
 
 func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *websocketConnectionCloser, *http.Response, error) {
+	headers, errFence := checkDialFence(ctx, wsURL, headers)
+	if errFence != nil {
+		return nil, nil, nil, errFence
+	}
 	dialer := newProxyAwareWebsocketDialer(ctx, e.cfg, auth)
 	dialer.HandshakeTimeout = codexResponsesWebsocketHandshakeTO
 	dialer.EnableCompression = true
@@ -205,6 +209,9 @@ func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession,
 		}
 		_ = conn.SetReadDeadline(time.Now().Add(codexResponsesWebsocketIdleTimeout))
 		msgType, payload, errRead := conn.ReadMessage()
+		if errRead == nil && msgType == websocket.TextMessage {
+			cliproxyexecutor.ObserveQuotaEvent(ctx, payload)
+		}
 		return msgType, payload, errRead
 	}
 	if conn == nil {
@@ -227,6 +234,7 @@ func readCodexWebsocketMessage(ctx context.Context, sess *codexWebsocketSession,
 			if ev.err != nil {
 				return 0, nil, ev.err
 			}
+			observeQuotaRead(ctx, ev)
 			return ev.msgType, ev.payload, nil
 		}
 	}

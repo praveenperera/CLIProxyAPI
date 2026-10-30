@@ -17,6 +17,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sync/singleflight"
 )
@@ -189,6 +190,10 @@ func (o *CodexAuth) ExchangeCodeForTokensWithRedirect(ctx context.Context, code,
 		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
 	}
 
+	if accountID != "" {
+		tokenData.OAuthProvenance, _ = affinity.AcquiredOAuthProvenance("codex", accountID, tokenResp.AccessToken)
+	}
+
 	// Create auth bundle
 	bundle := &CodexAuthBundle{
 		TokenData:   tokenData,
@@ -300,7 +305,7 @@ func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken 
 		planType = claims.GetPlanType()
 	}
 
-	return &CodexTokenData{
+	tokenData := &CodexTokenData{
 		IDToken:      tokenResp.IDToken,
 		AccessToken:  tokenResp.AccessToken,
 		RefreshToken: tokenResp.RefreshToken,
@@ -308,7 +313,9 @@ func (o *CodexAuth) refreshTokensSingleFlight(ctx context.Context, refreshToken 
 		Email:        email,
 		PlanType:     planType,
 		Expire:       time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second).Format(time.RFC3339),
-	}, nil
+	}
+	tokenData.OAuthProvenance, _ = affinity.AcquiredOAuthProvenance("codex", accountID, tokenResp.AccessToken)
+	return tokenData, nil
 }
 
 // CreateTokenStorage creates a new CodexTokenStorage from a CodexAuthBundle.
@@ -328,6 +335,7 @@ func (o *CodexAuth) CreateTokenStorage(bundle *CodexAuthBundle) *CodexTokenStora
 		Expire:       bundle.TokenData.Expire,
 		PlanType:     planType,
 	}
+	storage.OAuthProvenance = bundle.TokenData.OAuthProvenance
 
 	return storage
 }

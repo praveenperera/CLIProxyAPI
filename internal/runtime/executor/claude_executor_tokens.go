@@ -20,6 +20,9 @@ import (
 )
 
 func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+		return e.countTokensNative(ctx, auth, req, opts)
+	}
 	apiKey, baseURL := claudeCreds(auth)
 	if baseURL == "" {
 		baseURL = "https://api.anthropic.com"
@@ -147,6 +150,9 @@ func shouldUseClaudeUpstreamTokenCount(apiKey, baseURL string) bool {
 
 // countTokensUpstream preserves Anthropic's native token-counting contract.
 func (e *ClaudeExecutor) countTokensUpstream(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	if opts.NativeHistory == cliproxyexecutor.NativeHistoryPreserve {
+		return e.countTokensNative(ctx, auth, req, opts)
+	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 	upstreamModel := e.upstreamModel(baseModel)
 

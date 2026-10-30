@@ -492,6 +492,9 @@ func interceptStreamChunk(ctx context.Context, host PluginInterceptorHost, req p
 
 func (h *BaseAPIHandler) applyRequestInterceptorsBeforeAuth(ctx context.Context, handlerType, requestedModel, requestID string, req coreexecutor.Request, opts coreexecutor.Options, skipPluginID string) (coreexecutor.Request, coreexecutor.Options, *interfaces.ErrorMessage) {
 	host := h.interceptorHost()
+	if errChat := h.chatRequestHookError(ctx, host, opts); errChat != nil {
+		return req, opts, errChat
+	}
 	if !requestInterceptorsEnabled(host) {
 		return req, opts, nil
 	}

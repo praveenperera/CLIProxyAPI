@@ -92,12 +92,14 @@ retain the corresponding business operation's fields.
 | `/requests/api-call` | POST | Make an authenticated upstream call. |
 | `/routing/cooldown/reset` | POST | Clear credential cooldown. |
 | `/routing/model-definitions/<channel>` | GET | Get model definitions. |
+| `/quota/history` | GET | Get recorded quota-aware chat affinity history. |
 | `/observability/logs` | GET, DELETE | Read or clear application logs. |
 | `/observability/logs/errors` | GET | List error-log files. |
 | `/observability/logs/errors/<name>` | GET | Download an error-log file. |
 | `/observability/logs/requests/<id>` | GET | Get a request log. |
 | `/observability/usage/api-keys` | GET | Get API-key usage. |
 | `/observability/usage/queue` | GET | Get queued usage events. |
+| `/observability/usage/cache` | GET | Get prompt cache hit ratios and API-equivalent cost by credential, hour, model, and client session. See [Prompt cache usage](#prompt-cache-usage). |
 | `/credentials` | GET, POST, DELETE | List, upload, or delete credential files. |
 | `/credentials/models` | GET | Get credential models. |
 | `/credentials/download` | GET | Download a credential file. |
@@ -117,6 +119,41 @@ retain the corresponding business operation's fields.
 | `/plugins/store` | GET | List the plugin store (supports optional `?refresh=true` to bypass cached release checks). |
 | `/plugins/store/<id>/install` | POST | Install or update a plugin. |
 | `/plugins/<id>/quota` | GET, POST, DELETE | Read, fetch, or reset plugin quota. |
+
+### Prompt cache usage
+
+`GET /v8/management/observability/usage/cache` reports how much of each request's input came from the provider's prompt cache, and what the requests would cost at API list prices. Agents can use it to check whether their session is getting cache hits.
+
+| Query parameter | Meaning |
+| --- | --- |
+| `since`, `until` | Unix seconds; the default range is the last 24 hours. Totals are kept per hour, so the range widens to whole hours and the response's `since` and `until` give the bounds actually reported. |
+| `auth_id` | Only this credential, such as `claude-a93f2c35-user@example.com.json`. |
+| `session_id` | Only this client session in `sessions`. An exact match wins. Otherwise a bare ID such as a Claude Code session UUID matches `<provider>:<id>`, and every provider with that ID is listed. |
+
+```bash
+curl -s -H "Authorization: Bearer $MANAGEMENT_KEY" \
+  "http://<host>:8317/v8/management/observability/usage/cache?session_id=$CLAUDE_CODE_SESSION_ID"
+```
+
+The response has `totals`, `credentials` (each with `totals` and hourly `hours` points keyed by the hour's start `t`), `models` (`totals` per model that served the requests, busiest first; an empty `model` holds requests recorded before usage was kept per model, and `other` holds unpriced models past the first 64 names), and `sessions` (most recent first, each with `totals` and the latest request alone in `last_request`). A session also carries `title`, which is its T3 Code thread title when `observability.usage.t3-state-db` points at T3's `statev2.sqlite` and T3 ran the session, and otherwise the start of its first user prompt with client-injected context such as `<system-reminder>` blocks removed, and `project`, the last element of the client's working directory (Claude Code's `Primary working directory` or Codex's `<cwd>`); either is omitted when the request did not carry it. The prompt title and project are read once, from the session's first request the proxy sees, and only for clients that send their own session ID, such as Claude Code and Codex; T3 titles are reread at most every 30 seconds, so renames show up. Every totals object holds:
+
+| Field | Meaning |
+| --- | --- |
+| `requests` | Successful requests counted. |
+| `input_tokens` | All input tokens; equals the three buckets below added together. |
+| `cache_read_tokens` | Input read from the prompt cache. |
+| `cache_write_tokens` | Input written to the prompt cache. Codex rarely reports writes. |
+| `uncached_tokens` | Input neither read from nor written to the cache. |
+| `output_tokens` | Output tokens. |
+| `hit_ratio` | `cache_read_tokens / input_tokens` from 0 to 1, or `null` without input. |
+| `cache_write_1h_tokens` | Part of `cache_write_tokens` written to Anthropic's 1-hour cache, which costs more than the 5-minute cache. Omitted when zero. |
+| `cost_usd` | Cost in US dollars at Anthropic's API list prices, which is what the traffic would cost on the API rather than what a subscription bills. Omitted when zero. |
+| `no_cache_cost_usd` | The same requests with every input token at the base input price, so `no_cache_cost_usd - cost_usd` is what caching saved. Omitted when zero. |
+| `unpriced_requests` | Requests left out of both costs: models without a known price, such as Codex models, and requests recorded before cost tracking. Omitted when zero. |
+
+Costs use the served model's list price: cache reads, 5-minute and 1-hour cache writes, and output each at their own rate, Claude Haiku 5.5's higher prices for prompts over 100,000 tokens, and twice the rate for fast mode. `models` lists a priced model once under its plain ID, whatever snapshot date, cloud prefix, or suffix the upstream reported. Only the Claude executor reports 1-hour cache writes, so Claude served through another provider prices every write at the 5-minute rate, and US-only inference (`inference_geo`) is priced at the global rate.
+
+A session's `last_request.hit_ratio` near 0 with a large `cache_write_tokens` is a cold start, which happens on a session's first turn, after the cache expires, and after a failover to another account. Failed requests and responses without complete token accounting are not counted. Queued usage is delivered before shutdown saves the snapshot. Hourly totals are kept for 30 days and sessions for 7 days after their last request. They are saved beside the quota history and survive restarts when `routing.quota-aware-chat-affinity` is configured (`persisted: true`); otherwise they are kept in memory only.
 
 ## OAuth
 

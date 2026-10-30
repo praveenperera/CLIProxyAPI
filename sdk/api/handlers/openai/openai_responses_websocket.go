@@ -360,9 +360,13 @@ func (h *OpenAIResponsesAPIHandler) authenticateResponsesWebsocketTurn(c *gin.Co
 // response events back as JSON websocket text messages. `response.interrupt`
 // is forwarded to the current Codex upstream socket without starting a new turn.
 func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
+	upgradeHeaders, ok := h.prepareChatWebsocketUpgrade(c)
+	if !ok {
+		return
+	}
 	upgrader := responsesWebsocketUpgrader
 	upgrader.EnableCompression = responsesWebsocketCompressionEnabled.Load()
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, websocketUpgradeHeaders(c.Request))
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, upgradeHeaders)
 	if err != nil {
 		return
 	}

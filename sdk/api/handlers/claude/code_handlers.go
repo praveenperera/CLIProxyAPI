@@ -635,6 +635,9 @@ func (h *ClaudeCodeAPIHandler) WriteErrorResponse(c *gin.Context, msg *interface
 		_, _ = c.Writer.Write(body)
 		return
 	}
+	if h.writeLongCooldown(c, msg) {
+		return
+	}
 	var retryAfter string
 	if msg != nil && msg.Error != nil {
 		safeHeaders := coreauth.SafeResponseHeaders(msg.Error)

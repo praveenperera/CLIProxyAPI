@@ -162,6 +162,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		ResponseHeaders:  record.ResponseHeaders,
 	}
 
+	inputTransformations := inputTransformationsPayload(record)
 	payload, err := json.Marshal(queuedUsageDetail{
 		requestDetail:         detail,
 		AccountingVersion:     coreusage.TokenAccountingSchemaVersion,
@@ -200,6 +201,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		ToolUsageDetails:      usageDetail.ToolUsageDetails.Clone(),
 		Iterations:            usageDetail.IterationSlice(),
 		CostDetails:           usageDetail.CostDetails.Clone(),
+		InputTransformations:  inputTransformations,
 	})
 	if err != nil {
 		return
@@ -245,6 +247,8 @@ type queuedUsageDetail struct {
 	ToolUsageDetails      *coreusage.ToolUsageDetails `json:"tool_usage_details,omitempty"`
 	Iterations            []coreusage.IterationUsage  `json:"iterations,omitempty"`
 	CostDetails           *coreusage.CostDetails      `json:"cost_details,omitempty"`
+
+	InputTransformations *coreusage.InputTransformationCounts `json:"input_transformations,omitempty"`
 }
 
 type requestDetail struct {
