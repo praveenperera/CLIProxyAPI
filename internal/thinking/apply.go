@@ -305,6 +305,10 @@ func applyThinkingDocCore(doc *ojson.Doc, docValid bool, sourceBody []byte, mode
 	}
 	nativeResponses := responseTarget && isResponsesFormat(fromFormat) && supportsUpdates
 
+	if err := validateExplicitBetweenToolsDoc(doc, docValid, sourceBody, fromFormat, providerFormat, modelInfo, suffixResult.HasSuffix); err != nil {
+		return modified, err
+	}
+
 	// 2. Route check: Get provider applier after target cleanup.
 	applier, isPluginApplier := resolveProviderApplier(providerFormat, providerKey)
 	if applier == nil {
@@ -471,7 +475,7 @@ func applyThinkingDocCore(doc *ojson.Doc, docValid bool, sourceBody []byte, mode
 	if errApply != nil {
 		return modified, errApply
 	}
-	if thinkingIsFullyDisabled(*validated) || nativeResponses {
+	if validated.Mode == ModeBetweenTools || thinkingIsFullyDisabled(*validated) || nativeResponses {
 		return modified, nil
 	}
 	if providerFormat == "claude" && thinkingRequestedOff(config) {
@@ -828,6 +832,9 @@ func extractClaudeConfig(body []byte) ThinkingConfig {
 
 func extractClaudeConfigFromGetter(get func(string) ojson.Result) ThinkingConfig {
 	thinkingType := get("thinking.type").String()
+	if thinkingType == "between_tools" {
+		return ThinkingConfig{Mode: ModeBetweenTools, Level: ThinkingLevel(get("output_config.effort").String())}
+	}
 	if thinkingType == "disabled" {
 		return ThinkingConfig{Mode: ModeNone, Budget: 0}
 	}

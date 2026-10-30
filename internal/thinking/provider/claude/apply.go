@@ -24,6 +24,10 @@ func init() {
 
 // Apply applies thinking configuration to Claude request body.
 func (a *Applier) Apply(body []byte, config thinking.ThinkingConfig, modelInfo *registry.ModelInfo) ([]byte, error) {
+	if config.Mode == thinking.ModeBetweenTools {
+		return applyBetweenTools(body, config, modelInfo)
+	}
+
 	if !thinking.IsUserDefinedModel(modelInfo) && modelInfo.Thinking == nil {
 		return body, nil
 	}
@@ -56,6 +60,9 @@ func (a *Applier) Apply(body []byte, config thinking.ThinkingConfig, modelInfo *
 func (a *Applier) ApplyDoc(doc *ojson.Doc, config thinking.ThinkingConfig, modelInfo *registry.ModelInfo) error {
 	if doc == nil {
 		return nil
+	}
+	if config.Mode == thinking.ModeBetweenTools {
+		return applyBetweenToolsDoc(doc, config, modelInfo)
 	}
 	if thinking.IsUserDefinedModel(modelInfo) {
 		return applyCompatibleClaudeDoc(doc, config)
