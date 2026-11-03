@@ -261,6 +261,12 @@ func codexWindows(limits *codexLimits, received time.Time, event bool) []domain.
 				}
 			}
 		}
+		// a window with no length that has already reset is a placeholder for a limit the plan
+		// lacks, such as the zeroed secondary window on single-window plans; keeping it would
+		// record an empty quota series
+		if period == (domain.Period{}) && (reset == nil || !reset.After(received)) {
+			continue
+		}
 		windows = append(windows, sharedWindow(item.id, "generation", period, reset, remaining, nil))
 	}
 	return windows

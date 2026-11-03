@@ -93,6 +93,26 @@ func TestCodexNullWeeklyPrimaryAndUnknownAdditionalMeters(t *testing.T) {
 		t.Fatal("measured zero ignored")
 	}
 }
+
+// Single-window plans report a zeroed secondary window; it must not become a quota window
+func TestCodexZeroedPlaceholderWindowIsSkipped(t *testing.T) {
+	ref := credential(t, "codex")
+	s, err := ParseCodexUsage(ref, []byte(`{"rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":604800,"reset_after_seconds":3600},"secondary_window":{"used_percent":0,"limit_window_seconds":0,"reset_after_seconds":0}}}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	windows := s.View("model", now, 5*time.Minute).Windows()
+	if len(windows) != 1 || windows[0].ID() != "primary" {
+		t.Fatalf("windows = %d, want only primary", len(windows))
+	}
+	event, err := ParseCodexEvent(ref, []byte(`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":20,"window_minutes":10080,"reset_after_seconds":3600},"secondary":{"used_percent":0,"window_minutes":0,"reset_after_seconds":0}}}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := event.View("model", now, 5*time.Minute).Windows(); len(got) != 1 || got[0].ID() != "primary" {
+		t.Fatalf("event windows = %d, want only primary", len(got))
+	}
+}
 func TestCodexEventsReceiptAndResetConsistency(t *testing.T) {
 	ref := credential(t, "codex")
 	s, err := ParseCodexEvent(ref, []byte(`{"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":25,"window_minutes":10080,"reset_after_seconds":3600}}}`), now)
