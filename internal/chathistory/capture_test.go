@@ -76,3 +76,40 @@ func TestFailedSteerDoesNotShiftLaterTurns(t *testing.T) {
 		}
 	}
 }
+
+// With two steers queued, a failure of the second leaves the first to pair with
+// the successor response it started
+func TestFailedSteerRemovesTheSteerItNames(t *testing.T) {
+	recorder := &Recorder{queue: make(chan Event, 8)}
+	SetRecorder(recorder)
+	t.Cleanup(func() { SetRecorder(nil) })
+
+	ctx := WithCapture(context.Background())
+	frame := func(s string) { CaptureWebsocketChunk(ctx, []byte(s)) }
+	turn := func(id string) {
+		frame(`{"type":"response.created","response":{"id":"` + id + `"}}`)
+		frame(`{"type":"response.completed","response":{"id":"` + id + `"}}`)
+		Finish(ctx, usage.Record{RequestID: id})
+	}
+
+	CaptureWebsocketRequest(ctx, []byte(`{"type":"response.create","n":1}`))
+	frame(`{"type":"response.created","response":{"id":"r1"}}`)
+	CaptureWebsocketRequest(ctx, []byte(`{"n":"kept","type":"response.steer"}`))
+	frame(`{"type":"response.steer.accepted","steer":{"id":"s1"}}`)
+	CaptureWebsocketRequest(ctx, []byte(`{"n":"refused","type":"response.steer"}`))
+	frame(`{"type":"response.steer.accepted","steer":{"id":"s2"}}`)
+	frame(`{"type":"response.steer.failed","steer":{"id":"s2"}}`)
+	frame(`{"type":"response.completed","response":{"id":"r1"}}`)
+	Finish(ctx, usage.Record{RequestID: "r1"})
+	turn("r2")
+	// a late failure for a steer that already started its response changes nothing
+	frame(`{"type":"response.steer.failed","steer":{"id":"s1"}}`)
+	CaptureWebsocketRequest(ctx, []byte(`{"type":"response.create","n":3}`))
+	turn("r3")
+
+	for _, want := range []string{`"n":1`, `"n":"kept"`, `"n":3`} {
+		if event := <-recorder.queue; !strings.Contains(string(event.RequestBody), want) {
+			t.Errorf("%s: request %s, want %s", event.RequestID, event.RequestBody, want)
+		}
+	}
+}
