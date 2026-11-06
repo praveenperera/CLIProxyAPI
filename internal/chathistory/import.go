@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -105,16 +106,17 @@ func (r *Recorder) Import(call Call) error {
 }
 
 // Spooled reports the bytes waiting for upload, so an importer can wait for the
-// uploader instead of filling the disk
+// uploader instead of filling the disk. The uploader refreshes it after each pass
 func (r *Recorder) Spooled() int64 {
 	r.spool.mu.Lock()
 	defer r.spool.mu.Unlock()
 	return r.spool.spooled
 }
 
-// WaitUploaded closes open segments and waits until the uploader has sent every
-// segment or ctx ends. Segments still waiting stay in the spool directory and
-// upload on the next start
+// WaitUploaded closes open segments and waits until the uploader has tried every
+// segment or ctx ends. It fails when ClickHouse rejected any segment, which stays
+// in the spool directory with a .rejected suffix and is not retried. Segments
+// still waiting when ctx ends upload on the next start
 func (r *Recorder) WaitUploaded(ctx context.Context) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -122,6 +124,10 @@ func (r *Recorder) WaitUploaded(ctx context.Context) error {
 	for {
 		r.spool.rotate(true)
 		if len(r.spool.closed()) == 0 {
+			if rejected := r.rejected.Load(); rejected > 0 {
+				return fmt.Errorf("chathistory: ClickHouse rejected %d segments", rejected)
+			}
+
 			return nil
 		}
 
