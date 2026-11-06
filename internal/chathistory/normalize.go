@@ -90,10 +90,12 @@ func splitConversation(body []byte) (conversation, error) {
 	var conv conversation
 	if value, key := takeFirst(fields, systemKeys); key != "" {
 		value = moveBillingHeader(value, fields)
+		stripBlockMarkers(value)
 		conv.system = canonical(value)
 	}
 
 	if value, key := takeFirst(fields, toolKeys); key != "" {
+		stripToolMarkers(value)
 		conv.tools = canonical(value)
 	}
 
@@ -151,6 +153,7 @@ func splitMessages(value any) []message {
 
 	messages := make([]message, 0, len(items))
 	for _, item := range items {
+		stripMessageMarkers(item)
 		content := canonical(item)
 		messages = append(messages, message{
 			role:    roleOf(item),
@@ -209,13 +212,8 @@ func decodeJSON(body []byte, target any) error {
 	return decoder.Decode(target)
 }
 
-// canonical encodes a decoded JSON value with sorted keys and without HTML escaping,
-// after removing prompt cache markers. Clients move cache_control to the newest
-// message on every turn, so keeping it would give the same message a new hash each
-// time it is re-sent
+// canonical encodes a decoded JSON value with sorted keys and without HTML escaping
 func canonical(value any) []byte {
-	stripCacheControl(value)
-
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
@@ -226,16 +224,55 @@ func canonical(value any) []byte {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
-func stripCacheControl(value any) {
-	switch typed := value.(type) {
-	case map[string]any:
-		delete(typed, "cache_control")
-		for _, child := range typed {
-			stripCacheControl(child)
+// Prompt cache markers are removed before hashing, because clients move
+// cache_control to the newest message on every turn and the same message would
+// otherwise hash differently each time it is re-sent. Only the places the Claude
+// API defines markers are cleaned: a message, its content blocks, the blocks of a
+// tool result, system blocks and tools. A key of the same name inside a tool's
+// input or schema is the caller's data and stays
+
+// stripMessageMarkers removes cache markers from one conversation entry in place
+func stripMessageMarkers(item any) {
+	fields, ok := item.(map[string]any)
+	if !ok {
+		return
+	}
+
+	delete(fields, "cache_control")
+	stripBlockMarkers(fields["content"])
+}
+
+// stripBlockMarkers removes cache markers from a list of content blocks in place,
+// including the blocks nested in a tool result
+func stripBlockMarkers(value any) {
+	blocks, ok := value.([]any)
+	if !ok {
+		return
+	}
+
+	for _, block := range blocks {
+		fields, ok := block.(map[string]any)
+		if !ok {
+			continue
 		}
-	case []any:
-		for _, child := range typed {
-			stripCacheControl(child)
+
+		delete(fields, "cache_control")
+		if fields["type"] == "tool_result" {
+			stripBlockMarkers(fields["content"])
+		}
+	}
+}
+
+// stripToolMarkers removes the cache marker from each tool definition in place
+func stripToolMarkers(value any) {
+	tools, ok := value.([]any)
+	if !ok {
+		return
+	}
+
+	for _, tool := range tools {
+		if fields, ok := tool.(map[string]any); ok {
+			delete(fields, "cache_control")
 		}
 	}
 }

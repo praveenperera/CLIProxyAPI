@@ -13,9 +13,10 @@ type Message struct {
 	m message
 }
 
-// NewMessage canonicalizes a decoded conversation entry. It removes cache_control
-// markers from value in place
+// NewMessage canonicalizes a decoded conversation entry. It removes the entry's
+// prompt cache markers from value in place
 func NewMessage(value any) *Message {
+	stripMessageMarkers(value)
 	content := canonical(value)
 	return &Message{m: message{role: roleOf(value), content: content, hash: hashBytes(content)}}
 }
@@ -32,11 +33,12 @@ func Decode(raw []byte) (any, error) {
 	return value, errDecode
 }
 
-// ContentHash is the full hex SHA-256 of value's canonical encoding: sorted keys,
-// no HTML escaping and no cache_control. Claude Code names its transcript blobs
-// this way, so the importer can match a request's message references against
-// messages it rebuilds from the transcript
+// ContentHash is the full hex SHA-256 of a conversation entry's canonical
+// encoding: sorted keys, no HTML escaping and no prompt cache markers. Claude Code
+// names its transcript blobs this way, so the importer can match a request's
+// message references against messages it rebuilds from the transcript
 func ContentHash(value any) string {
+	stripMessageMarkers(value)
 	sum := sha256.Sum256(canonical(value))
 	return hex.EncodeToString(sum[:])
 }
@@ -70,8 +72,11 @@ func (r *Recorder) Import(call Call) error {
 		params = map[string]any{}
 	}
 
+	system := moveBillingHeader(call.System, params)
+	stripBlockMarkers(system)
+	stripToolMarkers(call.Tools)
 	conv := conversation{
-		system:   canonicalOrNil(moveBillingHeader(call.System, params)),
+		system:   canonicalOrNil(system),
 		tools:    canonicalOrNil(call.Tools),
 		messages: make([]message, len(call.Messages)),
 	}
