@@ -49,9 +49,22 @@ func (c conversation) format(provider string) string {
 }
 
 type message struct {
-	role    string
+	role string
+	// content is the canonical entry the hash covers, with images as the client sent them
 	content []byte
 	hash    string
+	// item is the decoded entry, kept so its images are only shrunk when its blob is new
+	item any
+}
+
+// stored is the content written to the message's blob: the canonical entry with tool
+// screenshots dropped and attached images re-encoded, see images.go
+func (m message) stored() []byte {
+	if m.item == nil || !hasImages(m.content) || !shrinkImages(m.item) {
+		return m.content
+	}
+
+	return canonical(m.item)
 }
 
 // keys tried in order for each part, covering Claude, OpenAI Chat Completions,
@@ -160,6 +173,7 @@ func splitMessages(value any) []message {
 			role:    roleOf(item),
 			content: content,
 			hash:    hashBytes(content),
+			item:    item,
 		})
 	}
 
@@ -236,11 +250,10 @@ func canonical(value any) []byte {
 // later call can be verified or resume hidden reasoning: Claude thinking
 // signatures, redacted thinking, OpenAI's encrypted reasoning and Gemini thought
 // signatures. Nobody but the provider can read them, and they were most of the
-// stored bytes because random data does not compress. Images stay on purpose as
-// real content; if storage grows too large they are the first thing to drop
-// here, which changes their messages' hashes and so needs a fresh import. It runs after
-// hashing for Claude Code's own references and before the stored hash, so the
-// proxy and the importer store the same content under the same hash
+// stored bytes because random data does not compress. Images are handled after
+// hashing instead, see images.go. It runs after hashing for Claude Code's own
+// references and before the stored hash, so the proxy and the importer store the
+// same content under the same hash
 func dropOpaque(value any) {
 	switch value := value.(type) {
 	case []any:

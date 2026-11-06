@@ -21,7 +21,7 @@ func NewMessage(value any) *Message {
 	stripMessageMarkers(value)
 	dropOpaque(value)
 	content := canonical(value)
-	return &Message{m: message{role: roleOf(value), content: content, hash: hashBytes(content)}}
+	return &Message{m: message{role: roleOf(value), content: content, hash: hashBytes(content), item: value}}
 }
 
 // Role is the entry's role, or its item type for OpenAI Responses items

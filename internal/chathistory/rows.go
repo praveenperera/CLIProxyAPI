@@ -136,27 +136,30 @@ func newRequestRow(event Event, ts, format string, response []byte) requestRow {
 func (r *Recorder) conversationRows(request requestRow, conv conversation, sessionID, requestID, ts, parent string, depth uint32) map[string][]any {
 	out := map[string][]any{}
 	format := request.Format
-	addBlob := func(kind string, content []byte) string {
+	// stored gives the content to write, called only for a blob not yet written, since a
+	// message's images are re-encoded there
+	addBlob := func(kind string, content []byte, hash string, stored func() []byte) string {
 		// an empty tool list or prompt is the same as none, so it gets no blob
 		switch string(content) {
 		case "", "null", "[]", "{}", `""`:
 			return ""
 		}
 
-		hash := hashBytes(content)
 		if !r.blobs.has(hash) && !pendingBlob(out, hash) {
+			kept := stored()
 			out["blobs"] = append(out["blobs"], blobRow{
-				Hash: hash, Kind: kind, Format: format, Bytes: len(content), Content: string(content), FirstSeen: ts,
+				Hash: hash, Kind: kind, Format: format, Bytes: len(kept), Content: string(kept), FirstSeen: ts,
 			})
 		}
 
 		return hash
 	}
 
-	request.System = addBlob("system", conv.system)
-	request.Tools = addBlob("tools", conv.tools)
+	asIs := func(content []byte) func() []byte { return func() []byte { return content } }
+	request.System = addBlob("system", conv.system, hashBytes(conv.system), asIs(conv.system))
+	request.Tools = addBlob("tools", conv.tools, hashBytes(conv.tools), asIs(conv.tools))
 	for _, msg := range conv.messages {
-		addBlob("message", msg.content)
+		addBlob("message", msg.content, msg.hash, msg.stored)
 		node := nodeHash(parent, msg.hash)
 		depth++
 		if !r.nodes.has(sessionID + "|" + node) {
