@@ -489,10 +489,12 @@ func orderedBlocks(blocks map[int]map[string]any) []any {
 
 // joinChunks rebuilds the response stream. Executors pass either one line per
 // chunk or raw reads that split lines anywhere; raw reads already hold their
-// newlines and must be joined as is, or a line spanning two reads breaks
+// newlines and must be joined as is, or a line spanning two reads breaks. Scanned
+// lines and websocket frames never hold a newline, so any newline, even one only
+// at a chunk's end, marks raw reads
 func joinChunks(chunks [][]byte) []byte {
 	for _, chunk := range chunks {
-		if bytes.IndexByte(bytes.TrimRight(chunk, "\r\n"), '\n') >= 0 {
+		if bytes.IndexByte(chunk, '\n') >= 0 {
 			return bytes.Join(chunks, nil)
 		}
 	}
