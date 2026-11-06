@@ -28,6 +28,12 @@ import (
 // text stays sharp while a screenshot shrinks to about a quarter of its PNG size
 const imageQuality = 80
 
+// limits on what is decoded for re-encoding; anything larger is stored as sent
+const (
+	maxWebPSide    = 16383
+	maxImagePixels = 40_000_000
+)
+
 // hasImages is a cheap check for content that may hold an inline image, so most
 // messages skip decoding
 func hasImages(content []byte) bool {
@@ -163,6 +169,13 @@ func shrinkImage(media, data string, fromTool bool) (shrunkImage, bool) {
 	// the EXIF orientation a phone photo relies on does not survive re-encoding, so a
 	// rotated JPEG stays as it is rather than being stored on its side
 	if jpegOrientation(raw) > 1 {
+		return shrunkImage{}, false
+	}
+
+	// a small file can declare a huge canvas; check the header before decoding so one
+	// pasted image cannot exhaust memory, and stay within WebP's 16383px limit
+	config, _, errConfig := image.DecodeConfig(bytes.NewReader(raw))
+	if errConfig != nil || config.Width > maxWebPSide || config.Height > maxWebPSide || config.Width*config.Height > maxImagePixels {
 		return shrunkImage{}, false
 	}
 
