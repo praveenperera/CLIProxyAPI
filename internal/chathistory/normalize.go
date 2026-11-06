@@ -236,7 +236,9 @@ func canonical(value any) []byte {
 // later call can be verified or resume hidden reasoning: Claude thinking
 // signatures, redacted thinking, OpenAI's encrypted reasoning and Gemini thought
 // signatures. Nobody but the provider can read them, and they were most of the
-// stored bytes because random data does not compress. Images stay. It runs after
+// stored bytes because random data does not compress. Images stay on purpose as
+// real content; if storage grows too large they are the first thing to drop
+// here, which changes their messages' hashes and so needs a fresh import. It runs after
 // hashing for Claude Code's own references and before the stored hash, so the
 // proxy and the importer store the same content under the same hash
 func dropOpaque(value any) {
