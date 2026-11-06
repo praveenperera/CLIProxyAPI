@@ -44,76 +44,82 @@ func hasImages(content []byte) bool {
 // whether it changed any. It leaves WebP, dropped and undecodable images alone, so
 // running it twice changes nothing more
 func shrinkImages(value any) bool {
-	return walkImages(value, false)
+	return walkImages(value, "", false)
 }
 
-func walkImages(value any, fromTool bool) bool {
+// walkImages looks for images only where each provider's layout puts them, so text or
+// a tool call's arguments that merely look like an image stay as they are. key is the
+// field that held value
+func walkImages(value any, key string, fromTool bool) bool {
 	changed := false
 	switch value := value.(type) {
 	case []any:
 		for _, item := range value {
-			changed = walkImages(item, fromTool) || changed
+			changed = walkImages(item, key, fromTool) || changed
 		}
 	case map[string]any:
-		if isToolOutput(value) {
+		kind, _ := value["type"].(string)
+		switch {
+		// a tool call holds the model's own arguments: Claude tool_use, Responses
+		// *_call items and Gemini functionCall
+		case strings.HasSuffix(kind, "tool_use") || strings.HasSuffix(kind, "_call") || key == "functionCall" || key == "function_call":
+			return false
+		// what a tool returned: Claude tool_result and server tool results, Responses
+		// *_call_output items and Gemini functionResponse
+		case strings.HasSuffix(kind, "tool_result") || strings.HasSuffix(kind, "_call_output") || key == "functionResponse" || key == "function_response":
 			fromTool = true
 		}
 
-		changed = shrinkInline(value, fromTool)
-		for key, field := range value {
-			if text, ok := field.(string); ok {
-				changed = shrinkDataURL(value, key, text, fromTool) || changed
-				continue
-			}
+		switch {
+		case key == "source" && kind == "base64":
+			// Claude's image source
+			changed = shrinkInline(value, "media_type", fromTool)
+		case key == "inlineData" || key == "inline_data":
+			// Gemini's inline data, in either JSON casing
+			changed = shrinkInline(value, "mimeType", fromTool) || shrinkInline(value, "mime_type", fromTool)
+		case kind == "input_image":
+			// Responses input_image, whose image_url is the data URL itself
+			changed = shrinkDataURL(value, "image_url", fromTool)
+		case key == "image_url":
+			// Chat Completions image_url part, whose url sits one level down
+			changed = shrinkDataURL(value, "url", fromTool)
+		}
 
-			changed = walkImages(field, fromTool) || changed
+		for field, inner := range value {
+			if _, ok := inner.(string); !ok {
+				changed = walkImages(inner, field, fromTool) || changed
+			}
 		}
 	}
 
 	return changed
 }
 
-// isToolOutput reports whether a block or item carries what a tool returned: Claude's
-// tool_result and server tool results, and the Responses API's *_call_output items
-func isToolOutput(fields map[string]any) bool {
-	kind, _ := fields["type"].(string)
-	return strings.HasSuffix(kind, "tool_result") || strings.HasSuffix(kind, "_call_output")
-}
-
-// shrinkInline handles an image given as base64 beside its media type: Claude's
-// image source and Gemini's inline data
-func shrinkInline(fields map[string]any, fromTool bool) bool {
-	data, ok := fields["data"].(string)
-	if !ok || data == "" {
+// shrinkInline handles an image given as base64 in data beside its media type
+func shrinkInline(fields map[string]any, mediaKey string, fromTool bool) bool {
+	data, _ := fields["data"].(string)
+	media, _ := fields[mediaKey].(string)
+	if data == "" || !strings.HasPrefix(media, "image/") {
 		return false
 	}
 
-	for _, key := range []string{"media_type", "mimeType", "mime_type"} {
-		media, _ := fields[key].(string)
-		if !strings.HasPrefix(media, "image/") {
-			continue
-		}
-
-		out, ok := shrinkImage(media, data, fromTool)
-		if !ok {
-			return false
-		}
-
-		fields["data"] = out.data
-		fields[key] = out.media
-		if out.omitted != nil {
-			fields["omitted"] = out.omitted
-		}
-
-		return true
+	out, ok := shrinkImage(media, data, fromTool)
+	if !ok {
+		return false
 	}
 
-	return false
+	fields["data"] = out.data
+	fields[mediaKey] = out.media
+	if out.omitted != nil {
+		fields["omitted"] = out.omitted
+	}
+
+	return true
 }
 
-// shrinkDataURL handles an image given as a data URL, as OpenAI's input_image and
-// image_url parts carry it
-func shrinkDataURL(fields map[string]any, key, text string, fromTool bool) bool {
+// shrinkDataURL handles an image given as a base64 data URL in fields[key]
+func shrinkDataURL(fields map[string]any, key string, fromTool bool) bool {
+	text, _ := fields[key].(string)
 	if !strings.HasPrefix(text, "data:image/") {
 		return false
 	}
@@ -162,7 +168,7 @@ func shrinkImage(media, data string, fromTool bool) (shrunkImage, bool) {
 
 	// WebP is already the target, and a GIF may be animated, which a still WebP would
 	// flatten to its first frame
-	if errDecode != nil || media == "image/webp" || media == "image/gif" {
+	if errDecode != nil || media == "image/webp" || media == "image/gif" || animatedPNG(raw) {
 		return shrunkImage{}, false
 	}
 
@@ -192,6 +198,33 @@ func shrinkImage(media, data string, fromTool bool) (shrunkImage, bool) {
 	return shrunkImage{media: "image/webp", data: base64.StdEncoding.EncodeToString(buf.Bytes())}, true
 }
 
+// animatedPNG reports whether a PNG is an APNG, which declares its frames in an acTL
+// chunk before the image data; Go decodes only the first frame
+func animatedPNG(raw []byte) bool {
+	if !bytes.HasPrefix(raw, []byte("\x89PNG\r\n\x1a\n")) {
+		return false
+	}
+
+	for at := 8; at+8 <= len(raw); {
+		size := int(binary.BigEndian.Uint32(raw[at:]))
+		switch string(raw[at+4 : at+8]) {
+		case "acTL":
+			return true
+		case "IDAT":
+			return false
+		}
+
+		// length, type, data and CRC
+		if size < 0 || size > len(raw) {
+			return false
+		}
+
+		at += 12 + size
+	}
+
+	return false
+}
+
 // jpegOrientation reads the EXIF orientation tag of a JPEG: 1 is upright, 2 to 8 flip
 // or rotate it, and 0 means the data is not a JPEG or has no tag
 func jpegOrientation(raw []byte) int {
@@ -200,6 +233,12 @@ func jpegOrientation(raw []byte) int {
 	}
 
 	for at := 2; at+4 <= len(raw) && raw[at] == 0xFF; {
+		// any number of 0xFF fill bytes may come before a marker
+		if raw[at+1] == 0xFF {
+			at++
+			continue
+		}
+
 		marker := raw[at+1]
 		size := int(binary.BigEndian.Uint16(raw[at+2:]))
 		// the image data starts at SOS, after every metadata segment

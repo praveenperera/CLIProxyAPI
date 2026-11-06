@@ -53,18 +53,19 @@ type message struct {
 	// content is the canonical entry the hash covers, with images as the client sent them
 	content []byte
 	hash    string
-	// item is the decoded entry, kept so its images are only shrunk when its blob is new
-	item any
 }
 
 // stored is the content written to the message's blob: the canonical entry with tool
-// screenshots dropped and attached images re-encoded, see images.go
+// screenshots dropped and attached images re-encoded, see images.go. It decodes content
+// afresh each time, so a message written again, after a retry or a rejected segment,
+// stores the same shrunk content rather than the original
 func (m message) stored() []byte {
-	if m.item == nil || !hasImages(m.content) || !shrinkImages(m.item) {
+	shrunk, _, errShrink := ShrinkStoredMessage(m.content)
+	if errShrink != nil {
 		return m.content
 	}
 
-	return canonical(m.item)
+	return shrunk
 }
 
 // keys tried in order for each part, covering Claude, OpenAI Chat Completions,
@@ -173,7 +174,6 @@ func splitMessages(value any) []message {
 			role:    roleOf(item),
 			content: content,
 			hash:    hashBytes(content),
-			item:    item,
 		})
 	}
 
