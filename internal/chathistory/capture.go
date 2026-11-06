@@ -3,9 +3,11 @@ package chathistory
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
@@ -36,8 +38,19 @@ type captureKey struct{}
 // turn and leaves the queue for the turns after it
 type capture struct {
 	mu      sync.Mutex
-	pending [][]byte
-	current turn
+	pending []pendingRequest
+	// steerIDs holds every steer id upstream acknowledged on this socket
+	steerIDs map[string]bool
+	current  turn
+}
+
+// pendingRequest is a queued request frame. A steer learns its upstream id from
+// the steer event that acknowledges it, so a later failure removes that steer and
+// not another one still queued
+type pendingRequest struct {
+	body    []byte
+	steer   bool
+	steerID string
 }
 
 type turn struct {
@@ -90,7 +103,7 @@ func CaptureRequest(ctx context.Context, body []byte) {
 	defer c.mu.Unlock()
 
 	// copied because callers may reuse the buffer
-	c.pending = [][]byte{bytes.Clone(body)}
+	c.pending = []pendingRequest{{body: bytes.Clone(body)}}
 	c.current = turn{}
 }
 
@@ -105,7 +118,7 @@ func CaptureWebsocketRequest(ctx context.Context, body []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.pending = append(c.pending, bytes.Clone(body))
+	c.pending = append(c.pending, pendingRequest{body: bytes.Clone(body), steer: isSteer(body)})
 }
 
 // CaptureChunk records one raw upstream HTTP response chunk
@@ -131,11 +144,7 @@ func CaptureWebsocketChunk(ctx context.Context, frame []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if isSteerFailed(frame) {
-		// a refused steer never gets a response of its own, so leaving it queued
-		// would pair every later response with the request before it
-		c.dropPendingSteer()
-	}
+	c.trackSteer(frame)
 
 	if created && c.current.sawCreated {
 		c.current = turn{}
@@ -183,25 +192,73 @@ func (c *capture) popPending() []byte {
 		return nil
 	}
 
-	request := c.pending[0]
-	c.pending[0] = nil
+	request := c.pending[0].body
+	c.pending[0] = pendingRequest{}
 	c.pending = c.pending[1:]
 	return request
 }
 
-// dropPendingSteer removes the oldest queued steer request; the caller holds mu
-func (c *capture) dropPendingSteer() {
-	for i, request := range c.pending {
-		if bytes.Contains(request, []byte(`"type":"response.steer"`)) {
-			c.pending = append(c.pending[:i], c.pending[i+1:]...)
-			return
-		}
+// trackSteer follows the upstream's steer events; the caller holds mu.
+// Upstream acknowledges steers in the order they were sent, so an acknowledgement
+// names the oldest steer without an id yet. A refused steer never gets a response
+// of its own, so it leaves the queue; left there, it would pair every later
+// response with the request before it
+func (c *capture) trackSteer(frame []byte) {
+	if !bytes.Contains(frame[:min(len(frame), 256)], []byte(`"response.steer.`)) {
+		return
 	}
+
+	kind := ojson.GetBytes(frame, "type").String()
+	if !strings.HasPrefix(kind, "response.steer.") {
+		return
+	}
+
+	id := ojson.GetBytes(frame, "steer.id").String()
+	index := c.steerIndex(id)
+	if index < 0 {
+		return
+	}
+
+	if kind == "response.steer.failed" {
+		c.pending = append(c.pending[:index], c.pending[index+1:]...)
+		return
+	}
+
+	c.pending[index].steerID = id
+	if c.steerIDs == nil {
+		c.steerIDs = map[string]bool{}
+	}
+
+	c.steerIDs[id] = true
 }
 
-func isSteerFailed(frame []byte) bool {
-	head := frame[:min(len(frame), 256)]
-	return bytes.Contains(head, []byte(`"response.steer.failed"`))
+// steerIndex finds the queued steer with this id, or else the oldest steer not yet
+// acknowledged. An id seen before whose steer already left the queue, as when its
+// successor response started, matches nothing; the caller holds mu
+func (c *capture) steerIndex(id string) int {
+	if id != "" {
+		for i, request := range c.pending {
+			if request.steer && request.steerID == id {
+				return i
+			}
+		}
+
+		if c.steerIDs[id] {
+			return -1
+		}
+	}
+
+	for i, request := range c.pending {
+		if request.steer && request.steerID == "" {
+			return i
+		}
+	}
+
+	return -1
+}
+
+func isSteer(body []byte) bool {
+	return ojson.GetBytes(body, "type").String() == "response.steer"
 }
 
 func isResponseCreated(frame []byte) bool {
