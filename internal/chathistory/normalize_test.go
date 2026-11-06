@@ -33,3 +33,37 @@ func TestCacheMarkersStripOnlyWhereTheAPIDefinesThem(t *testing.T) {
 		t.Fatalf("tools %s, want the schema property kept and the marker gone", on.tools)
 	}
 }
+
+// Signatures and encrypted reasoning are dropped from messages and responses, so
+// the same turn hashes alike with or without them, while thinking text and
+// images stay
+func TestOpaqueProviderFieldsAreNotStored(t *testing.T) {
+	body := func(signature string) []byte {
+		return []byte(`{"messages":[
+			{"role":"assistant","content":[{"type":"thinking","thinking":"plan","signature":"` + signature + `"},{"type":"redacted_thinking","data":"` + signature + `"}]},
+			{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo"}}]},
+			{"type":"reasoning","summary":[],"encrypted_content":"` + signature + `"}]}`)
+	}
+
+	first, errFirst := splitConversation(body("c2lnLW9uZQ"))
+	second, errSecond := splitConversation(body("c2lnLXR3bw"))
+	if errFirst != nil || errSecond != nil {
+		t.Fatal(errFirst, errSecond)
+	}
+
+	for i := range first.messages {
+		if first.messages[i].hash != second.messages[i].hash {
+			t.Fatalf("message %d hashes differ by its signature: %s", i, first.messages[i].content)
+		}
+	}
+
+	stored := string(first.messages[0].content) + string(first.messages[1].content) + string(first.messages[2].content)
+	if strings.Contains(stored, "c2lnLW9uZQ") || !strings.Contains(stored, `"plan"`) || !strings.Contains(stored, "iVBORw0KGgo") {
+		t.Fatalf("stored %s, want the thinking text and image kept and every signature gone", stored)
+	}
+
+	response := assembleResponse([][]byte{[]byte(`{"type":"message","id":"m1","content":[{"type":"thinking","thinking":"plan","signature":"c2lnLW9uZQ"}]}`)})
+	if strings.Contains(string(response.body), "c2lnLW9uZQ") || !strings.Contains(string(response.body), `"plan"`) {
+		t.Fatalf("response %s, want the signature gone", response.body)
+	}
+}
