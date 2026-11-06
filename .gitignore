@@ -35,6 +35,7 @@ docs/*
 !docs/websocket-tunnel_CN.md
 !docs/claude-between-tools.md
 !docs/quota-aware-chat-affinity.md
+!docs/chat-history.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md

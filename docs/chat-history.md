@@ -1,0 +1,63 @@
+# Chat history
+
+With `observability.chat-history.enabled`, the proxy records every upstream model call in ClickHouse: the request it sent, the response it received, and the call's session, account, token usage, latency and outcome. Capture works for every executor that reports through the shared logging helpers, including Claude, Codex (SSE and websocket), Gemini and OpenAI-compatible upstreams, and it does not depend on `request-log`.
+
+## Configuration
+
+```yaml
+observability:
+  chat-history:
+    enabled: true
+    endpoint: "http://code.local:8123"
+    database: "chat"            # default
+    user: "chat"
+    password-file: "~/.config/chat-history/password"
+    spool-dir: "~/.local/share/cliproxyapi/chat-history"
+    max-spool-mb: 5120          # default
+    flush-seconds: 30           # default
+```
+
+The password is read from `password-file` so it stays out of the config file and the management API's config view. An invalid block is rejected when the config loads. A missing password file or an unwritable spool directory is logged and leaves capture off without stopping the proxy. Changing the block on a running server logs a warning and takes effect after a restart.
+
+The ClickHouse schema lives with the server that runs it; for this deployment see `ai5090/chat-history/` in the homelab repository. The tables are `chat.blobs`, `chat.nodes` and `chat.requests`, described below.
+
+## What is stored
+
+Each request re-sends the whole conversation, so storing request bodies would grow with the square of conversation length. The proxy splits each request instead:
+
+| Part | Stored as |
+| --- | --- |
+| System prompt or instructions | One `blobs` row per distinct content, referenced from `requests.system` |
+| Tool list | One `blobs` row per distinct content, referenced from `requests.tools` |
+| Each message or Responses input item | One `blobs` row per distinct content, plus one `nodes` row per position in the session |
+| Other request fields (model, max tokens, thinking) | `requests.params` |
+| The response | `requests.response`, assembled from the stream |
+
+A node's id hashes its parent node and its message, so two requests that share a prefix share its nodes, and a conversation that is rewound or edited branches from the shared part. Each `requests` row points at its last node (`leaf`) and records `message_count`. A turn that adds two messages writes two nodes however long the conversation already is.
+
+Before hashing, messages are re-encoded with sorted keys and without `cache_control`, because clients move cache markers to the newest message on every turn and the same message would otherwise hash differently each time it is re-sent. For the same reason a leading Claude `x-anthropic-billing-header` system block, whose `cch` value hashes the whole request body, is moved out of the system prompt into `requests.params` as `_billing_header`.
+
+The request is the body sent upstream, after translation and any payload rules, so it is what the model saw. When an executor retries inside one attempt, such as falling back to another base URL, the last request and its response are kept.
+
+Responses are folded into the provider's non-streaming response shape: Claude content blocks with thinking, signatures and parsed tool input; the Responses API `response` object with its output items, including items an interrupted stream left unfinished; Gemini candidates with merged text parts; and Chat Completions choices with joined content and tool calls. A body that is one JSON value, such as a pretty-printed Gemini response, is kept whole. Unknown formats keep the raw bytes. A response larger than 64 MiB keeps its first 64 MiB and the row's `error` says it was truncated. `requests.format` comes from the response, or from the request's layout when a failed call has none.
+
+A websocket can carry many turns on one attempt, and duplex Codex sessions write the next `response.create` or a `response.steer` while the current response is still streaming. Websocket requests therefore queue, each response takes the oldest queued request when its first frame arrives, and a steer is recorded as the request of the response that consumes it. Websocket turns have no HTTP status, so a successful one records `status_code` 0.
+
+An OpenAI Responses request that sends only new input with `previous_response_id` continues the chain of the request that produced that response, while this process remembers it; the earlier response's output stays in that request's `response` column rather than becoming a node.
+
+## Delivery
+
+Capture never blocks a request. The executor hands the captured buffers to a bounded queue of 64 calls when it publishes the call's usage; if the queue is full the call is dropped and counted in the log. A background worker parses the call, skips content and nodes it has already written, and appends rows to per-table NDJSON segments in `spool-dir`, flushed after every call. Numbers are clamped to their column ranges, since one out-of-range value would get a whole segment rejected. A failed write cuts the segment back to its last complete row and starts a new one.
+
+Segments are closed after `flush-seconds` or 32 MiB and uploaded with gzip over ClickHouse's HTTP interface. Each segment's file name is its insert deduplication token, so a retry after a lost response does not insert rows twice. Uploads stop at the first failure and retry with backoff up to five minutes, keeping table order. A segment ClickHouse rejects as malformed is renamed with a `.rejected` suffix and skipped, and the worker forgets what it has written so later calls send their blobs and nodes again instead of pointing at rows that never arrived. Rejected segments do not count toward `max-spool-mb`. Segments left open by a crash are trimmed to their last complete line and uploaded on the next start. Shutdown spools the queue, closes segments and makes one last upload attempt.
+
+While `max-spool-mb` is waiting for upload, new calls are dropped rather than filling the disk. Errors other than a rejection, such as a missing table (404) or a server error, are retried indefinitely, so a misconfigured server fills the spool and then stops recording until it is fixed; the log names the failing segment.
+
+## Limits
+
+- Calls served by plugin executors that do not use the shared logging helpers are not captured.
+- Session titles are not stored; the first user message of a session is in `chat.session_messages(session = ...)`.
+- Duplicate-skipping covers what this process has written recently. Content written again after a restart is collapsed by ClickHouse's `ReplacingMergeTree` during merges, so exact reads use `FINAL`, and the kept copy's `first_seen` may be the later sighting.
+- Calls still queued in memory when the process crashes are lost; a clean shutdown spools them.
+- `previous_response_id` chains are remembered in memory only. After a restart an incremental Responses turn starts a new chain; its `params` keep `previous_response_id` for joining later.
+- Nothing is masked. Tool output routinely includes file contents and credentials, so keep the ClickHouse server private.

@@ -6,6 +6,7 @@ This fork tracks the latest release of [router-for-me/CLIProxyAPI](https://githu
 - Quota-aware chat routing with always-on session affinity, quota weights, ordered priority tiers and native Claude history preservation ([docs/quota-aware-chat-affinity.md](docs/quota-aware-chat-affinity.md))
 - Same-account retries for brief upstream errors (`routing.transient-retries`)
 - Quota history and per-session prompt cache usage reports in the v8 management API ([docs/management-api-v8.md](docs/management-api-v8.md))
+- Chat history capture to ClickHouse, storing each message once ([docs/chat-history.md](docs/chat-history.md))
 
 The fork is kept as a short stack of commits on top of upstream and rebased, not merged, so the fork's changes stay readable as one diff against upstream.
 

@@ -3,9 +3,12 @@ package config
 import "gopkg.in/yaml.v3"
 
 // ValidateFork checks the settings this fork adds on top of upstream: the quota-aware chat
-// affinity profile and the ordered strategy's routing order
+// affinity profile, chat history capture, and the ordered strategy's routing order
 func (cfg *Config) ValidateFork() error {
 	if _, errValidate := cfg.QuotaAffinitySettings(); errValidate != nil {
+		return errValidate
+	}
+	if errValidate := cfg.ValidateChatHistory(); errValidate != nil {
 		return errValidate
 	}
 	return cfg.ValidateRoutingOrder()
