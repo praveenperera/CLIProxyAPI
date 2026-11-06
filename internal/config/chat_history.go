@@ -40,6 +40,10 @@ func (cfg *Config) ValidateChatHistory() error {
 	var problems []string
 	if parsed, errParse := url.Parse(strings.TrimSpace(settings.Endpoint)); errParse != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		problems = append(problems, "endpoint must be an http or https URL")
+	} else if parsed.User != nil {
+		// the endpoint is logged at startup, so credentials belong in user and
+		// password-file
+		problems = append(problems, "endpoint must not contain credentials; use user and password-file")
 	}
 
 	if strings.TrimSpace(settings.User) == "" {

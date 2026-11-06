@@ -159,9 +159,9 @@ func (r *Recorder) Record(event Event) {
 	select {
 	case r.queue <- event:
 	default:
-		if r.dropped.Add(1)%100 == 1 {
-			log.Warnf("chathistory: queue full, dropped %d calls so far", r.dropped.Load())
-		}
+		// counted only: logging here could stall the request on a slow log writer,
+		// so the uploader reports drops
+		r.dropped.Add(1)
 	}
 }
 
@@ -257,6 +257,7 @@ func (r *Recorder) ship(ctx context.Context) {
 
 	var failures int
 	var retryAt time.Time
+	var reported int64
 	for {
 		select {
 		case <-ctx.Done():
@@ -270,6 +271,11 @@ func (r *Recorder) ship(ctx context.Context) {
 		}
 
 		r.spool.rotate(false)
+		if dropped := r.dropped.Load(); dropped > reported {
+			log.Warnf("chathistory: queue full, dropped %d calls so far", dropped)
+			reported = dropped
+		}
+
 		if time.Now().Before(retryAt) {
 			continue
 		}
