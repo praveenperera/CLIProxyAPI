@@ -154,6 +154,7 @@ func splitMessages(value any) []message {
 	messages := make([]message, 0, len(items))
 	for _, item := range items {
 		stripMessageMarkers(item)
+		dropOpaque(item)
 		content := canonical(item)
 		messages = append(messages, message{
 			role:    roleOf(item),
@@ -230,6 +231,42 @@ func canonical(value any) []byte {
 // API defines markers are cleaned: a message, its content blocks, the blocks of a
 // tool result, system blocks and tools. A key of the same name inside a tool's
 // input or schema is the caller's data and stays
+
+// dropOpaque removes, in place, the opaque base64 fields providers attach so a
+// later call can be verified or resume hidden reasoning: Claude thinking
+// signatures, redacted thinking, OpenAI's encrypted reasoning and Gemini thought
+// signatures. Nobody but the provider can read them, and they were most of the
+// stored bytes because random data does not compress. Images stay. It runs after
+// hashing for Claude Code's own references and before the stored hash, so the
+// proxy and the importer store the same content under the same hash
+func dropOpaque(value any) {
+	switch value := value.(type) {
+	case []any:
+		for _, item := range value {
+			dropOpaque(item)
+		}
+	case map[string]any:
+		switch value["type"] {
+		case "thinking":
+			delete(value, "signature")
+		case "redacted_thinking":
+			delete(value, "data")
+		case "reasoning":
+			delete(value, "encrypted_content")
+		}
+
+		delete(value, "thoughtSignature")
+		for _, field := range value {
+			dropOpaque(field)
+		}
+	}
+}
+
+// responseBody encodes a response for storage without its opaque fields
+func responseBody(value any) []byte {
+	dropOpaque(value)
+	return canonical(value)
+}
 
 // stripMessageMarkers removes cache markers from one conversation entry in place
 func stripMessageMarkers(item any) {
