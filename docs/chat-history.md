@@ -53,6 +53,27 @@ Segments are closed after `flush-seconds` or 32 MiB and uploaded with gzip over 
 
 While `max-spool-mb` is waiting for upload, new calls are dropped rather than filling the disk. Errors other than a rejection, such as a missing table (404) or a server error, are retried indefinitely, so a misconfigured server fills the spool and then stops recording until it is fixed; the log names the failing segment.
 
+## Importing local transcripts
+
+`cmd/import_chat_history` loads conversations from before the proxy recorded them: Claude Code transcripts under `~/.claude/projects` (main sessions and `subagents/` files) and Codex rollouts under `~/.codex/sessions`. It writes through the same rows, spool and upload as the proxy, so imported content shares blobs with captured content, and `requests.source` says where each row came from: `proxy`, `claude-code` or `codex`.
+
+```bash
+go build -o import_chat_history ./cmd/import_chat_history
+./import_chat_history -dry-run                     # parse everything, report the spooled size, upload nothing
+./import_chat_history -endpoint http://code.local:8123 -password-file ~/.config/chat-history/password
+./import_chat_history -until 2026-11-06T00:00:00-06:00   # skip calls from when the proxy started recording
+```
+
+Re-running it is safe: `chat.requests` is a `ReplacingMergeTree` keyed by session, time and request id, so a second import of the same call collapses into the first when parts merge, and reads with `FINAL` see one row before then. An interrupted run leaves segments in `-spool-dir`, which the next run uploads first.
+
+How each source becomes calls:
+
+- **Claude Code** writes an `api-request` line per API call, holding its params and its messages as the first `keep` messages of a `base` request plus a `tail` of message hashes, and an `api-request-shape` line holding the system prompt and tools. A message the transcript does not hold elsewhere is an `api-request-blob` line; the rest are rebuilt from the transcript's `user` and `assistant` lines, merging consecutive user lines such as parallel tool results into one message as the API received them. The response is the assistant message whose lines name the request in `requestRef`. Sessions are `claude-code:<sessionId>`, and a subagent is `claude-code:<sessionId>/agent-<agentId>` with the main session as its parent.
+- **Older Claude Code transcripts** without `api-request` lines are rebuilt from each line's `parentUuid` chain, one call per assistant message, with no system prompt or tools.
+- **Codex** rollouts list the Responses API items in order. Each call ends with a `token_usage_record` naming its response, or a `token_count` event in rollouts without records. A call's request is every item before its first output (reasoning, an assistant message or a tool call), and its response is those outputs. A `compacted` line replaces the history with its `replacement_history`. Sessions are `codex:<id>`, and a subagent's parent is the thread that spawned it.
+
+Imported rows have no latency, status or account, since transcripts do not record them. A message a Claude Code request references but the transcript does not hold, about 1% of rebuilt messages in late 2026, is stored as `{"role":"unknown","_missing_claude_code_hash":...}` so the conversation keeps its length; the importer prints the count.
+
 ## Limits
 
 - Calls served by plugin executors that do not use the shared logging helpers are not captured.
@@ -60,4 +81,5 @@ While `max-spool-mb` is waiting for upload, new calls are dropped rather than fi
 - Duplicate-skipping covers what this process has written recently. Content written again after a restart is collapsed by ClickHouse's `ReplacingMergeTree` during merges, so exact reads use `FINAL`, and the kept copy's `first_seen` may be the later sighting.
 - Calls still queued in memory when the process crashes are lost; a clean shutdown spools them.
 - `previous_response_id` chains are remembered in memory only. After a restart an incremental Responses turn starts a new chain; its `params` keep `previous_response_id` for joining later.
+- Transcripts imported after the proxy starts recording describe the same calls again under different session ids; pass `-until` with the time capture started.
 - Nothing is masked. Tool output routinely includes file contents and credentials, so keep the ClickHouse server private.
