@@ -17,7 +17,7 @@ observability:
     flush-seconds: 30           # default
 ```
 
-The password is read from `password-file` so it stays out of the config file and the management API's config view. An invalid block is rejected when the config loads. A missing password file or an unwritable spool directory is logged and leaves capture off without stopping the proxy. Changing the block on a running server logs a warning and takes effect after a restart.
+The password is read from `password-file` so it stays out of the config file and the management API's config view. On macOS, a proxy run by launchd, or an importer left running after its ssh session ends, can fail to reach a LAN address with `no route to host` while the same address works from a shell; this points to macOS Local Network privacy, and a Tailscale address avoids it. An invalid block is rejected when the config loads. A missing password file or an unwritable spool directory is logged and leaves capture off without stopping the proxy. Changing the block on a running server logs a warning and takes effect after a restart.
 
 The ClickHouse schema lives with the server that runs it; for this deployment see `ai5090/chat-history/` in the homelab repository. The tables are `chat.blobs`, `chat.nodes` and `chat.requests`, described below.
 
