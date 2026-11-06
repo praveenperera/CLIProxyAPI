@@ -80,6 +80,9 @@ type Recorder struct {
 	responses *leafMap
 
 	dropped atomic.Int64
+	// rejected counts segments ClickHouse refused, so an importer can fail
+	// instead of reporting success
+	rejected atomic.Int64
 	// forget asks the worker to clear what it has written, after ClickHouse
 	// rejected a segment whose blobs and nodes later rows would point at
 	forget atomic.Bool
@@ -311,6 +314,7 @@ func (r *Recorder) uploadAll(ctx context.Context) error {
 		}
 
 		r.forget.Store(true)
+		r.rejected.Add(1)
 		log.Errorf("%v", errUpload)
 	}
 
