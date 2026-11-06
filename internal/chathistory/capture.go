@@ -80,6 +80,12 @@ func CaptureRequest(ctx context.Context, body []byte) {
 		return
 	}
 
+	// a websocket upgrade is logged as a bodyless HTTP request; it is not a model
+	// request and must not replace the one already queued
+	if len(body) == 0 {
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -125,6 +131,12 @@ func CaptureWebsocketChunk(ctx context.Context, frame []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if isSteerFailed(frame) {
+		// a refused steer never gets a response of its own, so leaving it queued
+		// would pair every later response with the request before it
+		c.dropPendingSteer()
+	}
+
 	if created && c.current.sawCreated {
 		c.current = turn{}
 	}
@@ -147,10 +159,18 @@ func (c *capture) appendChunk(chunk []byte) {
 		c.current.request = c.popPending()
 	}
 
-	// keep a clean prefix: once a chunk is skipped, later ones would leave a gap
-	if c.current.truncated || c.current.bytes+len(chunk) > maxCaptureBytes {
-		c.current.truncated = true
+	if c.current.truncated {
 		return
+	}
+
+	// keep a clean prefix: the chunk that crosses the limit keeps what fits, and
+	// later ones are skipped, since they would leave a gap
+	if room := maxCaptureBytes - c.current.bytes; len(chunk) > room {
+		c.current.truncated = true
+		chunk = chunk[:room]
+		if len(chunk) == 0 {
+			return
+		}
 	}
 
 	c.current.chunks = append(c.current.chunks, bytes.Clone(chunk))
@@ -167,6 +187,21 @@ func (c *capture) popPending() []byte {
 	c.pending[0] = nil
 	c.pending = c.pending[1:]
 	return request
+}
+
+// dropPendingSteer removes the oldest queued steer request; the caller holds mu
+func (c *capture) dropPendingSteer() {
+	for i, request := range c.pending {
+		if bytes.Contains(request, []byte(`"type":"response.steer"`)) {
+			c.pending = append(c.pending[:i], c.pending[i+1:]...)
+			return
+		}
+	}
+}
+
+func isSteerFailed(frame []byte) bool {
+	head := frame[:min(len(frame), 256)]
+	return bytes.Contains(head, []byte(`"response.steer.failed"`))
 }
 
 func isResponseCreated(frame []byte) bool {
