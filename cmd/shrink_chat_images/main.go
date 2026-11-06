@@ -45,6 +45,13 @@ func run(in io.Reader, out, log io.Writer) error {
 			}
 
 			rows++
+			// only messages hold images; a tool list or prompt that mentions one is data
+			var kind string
+			_ = json.Unmarshal(row["kind"], &kind)
+			if kind != "message" {
+				continue
+			}
+
 			shrunk, ok, errShrink := chathistory.ShrinkStoredMessage([]byte(content))
 			if errShrink != nil {
 				return fmt.Errorf("row %d: %w", rows, errShrink)

@@ -107,7 +107,65 @@ func TestJPEGOrientation(t *testing.T) {
 		t.Fatalf("orientation %d, want 6", got)
 	}
 
+	// fill bytes may come before a marker
+	padded := append([]byte{0xFF, 0xD8, 0xFF, 0xFF}, jpeg[2:]...)
+	if got := jpegOrientation(padded); got != 6 {
+		t.Fatalf("orientation %d after a fill byte, want 6", got)
+	}
+
 	if _, ok := shrinkImage("image/jpeg", base64.StdEncoding.EncodeToString(jpeg), false); ok {
 		t.Fatal("a rotated JPEG was re-encoded")
+	}
+}
+
+// Only the fields each provider defines for images change: text and a tool call's
+// arguments that look like a data URL stay, Gemini tool output is dropped beside a kept
+// attachment, and a message stored twice stores the same content both times
+func TestOnlyImageFieldsChange(t *testing.T) {
+	shot := screenshot(t)
+	url := "data:image/png;base64," + shot
+	body := `{"contents":[{"role":"user","parts":[
+		{"text":"` + url + ` and more text"},
+		{"inlineData":{"mimeType":"image/png","data":"` + shot + `"}},
+		{"functionCall":{"name":"draw","args":{"image_url":"` + url + `"}}},
+		{"functionResponse":{"name":"shot","response":{},"parts":[{"inlineData":{"mimeType":"image/png","data":"` + shot + `"}}]}}]},
+		{"role":"assistant","content":[{"type":"tool_use","id":"u","name":"t","input":{"source":{"type":"base64","media_type":"image/png","data":"` + shot + `"}}}]}]}`
+	conv, errSplit := splitConversation([]byte(body))
+	if errSplit != nil {
+		t.Fatal(errSplit)
+	}
+
+	stored := string(conv.messages[0].stored())
+	if again := string(conv.messages[0].stored()); again != stored {
+		t.Fatal("storing the same message twice gave different content")
+	}
+
+	if !strings.Contains(stored, `"text":"`+url+` and more text"`) || !strings.Contains(stored, `"args":{"image_url":"`+url+`"}`) {
+		t.Errorf("text or call arguments changed: %.300s", stored)
+	}
+
+	if strings.Count(stored, "image/webp") != 1 || strings.Count(stored, `"omitted":{`) != 1 {
+		t.Errorf("want the attachment kept as WebP and the functionResponse image dropped: %.300s", stored)
+	}
+
+	if call := conv.messages[1].stored(); !bytes.Equal(call, conv.messages[1].content) {
+		t.Errorf("a tool_use input changed: %.300s", call)
+	}
+}
+
+// An animated PNG keeps its frames: Go would decode only the first, so it is not
+// re-encoded
+func TestAnimatedPNGIsKept(t *testing.T) {
+	raw, _ := base64.StdEncoding.DecodeString(screenshot(t))
+	// an acTL chunk right after IHDR, as an APNG writer puts it
+	ihdrEnd := 8 + 12 + 13
+	actl := []byte{0, 0, 0, 8, 'a', 'c', 'T', 'L', 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0}
+	animated := append(append(append([]byte{}, raw[:ihdrEnd]...), actl...), raw[ihdrEnd:]...)
+	if !animatedPNG(animated) || animatedPNG(raw) {
+		t.Fatal("acTL not told apart from a still PNG")
+	}
+
+	if _, ok := shrinkImage("image/png", base64.StdEncoding.EncodeToString(animated), false); ok {
+		t.Fatal("an animated PNG was re-encoded")
 	}
 }
