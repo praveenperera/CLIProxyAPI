@@ -271,6 +271,12 @@ func (f *ccFile) calls() []chathistory.Call {
 		group.sortBlocks()
 		value := map[string]any{"role": "assistant", "content": group.blocks}
 		f.candidates[chathistory.ContentHash(value)] = value
+		// Claude Code writes <synthetic> messages itself, such as after an
+		// interruption; they stay in the history but never answer a request
+		if group.synthetic() {
+			continue
+		}
+
 		if request := f.byID[group.request]; request != nil {
 			// a retried request keeps its last answer
 			request.response = group
@@ -300,8 +306,7 @@ func (f *ccFile) calls() []chathistory.Call {
 func (f *ccFile) unpaired() []*ccGroup {
 	var groups []*ccGroup
 	for _, group := range f.groupOrder {
-		// <synthetic> messages are written by Claude Code itself, not a model
-		if group.model == "<synthetic>" && !group.apiError {
+		if group.synthetic() {
 			continue
 		}
 
@@ -371,6 +376,12 @@ func (f *ccFile) chainCall(group *ccGroup) chathistory.Call {
 	return call
 }
 
+// synthetic reports whether Claude Code wrote the message itself rather than a
+// model; an API error it records this way still answers its request
+func (g *ccGroup) synthetic() bool {
+	return g.model == "<synthetic>" && !g.apiError
+}
+
 // fill adds the assistant message as the call's response
 func (g *ccGroup) fill(call *chathistory.Call) {
 	call.ResponseModel = g.model
@@ -429,13 +440,20 @@ func (f *ccFile) resolve(request *ccRequest) []*chathistory.Message {
 		}
 	}
 
-	keep := min(max(request.line.Keep, 0), len(prefix))
-	if missing := request.line.Keep - keep; missing > 0 {
-		f.stats.Unresolved += missing
+	keep := max(request.line.Keep, 0)
+	messages := make([]*chathistory.Message, 0, keep+len(request.line.Tail))
+	messages = append(messages, prefix[:min(keep, len(prefix))]...)
+	// a base the file lacks still held keep messages; placeholders keep later
+	// messages at their real depth, and name the base and position so requests
+	// sharing that base share them too
+	for position := len(messages); position < keep; position++ {
+		f.stats.Unresolved++
+		messages = append(messages, chathistory.NewMessage(map[string]any{
+			"role": "unknown", "content": []any{},
+			"_missing_claude_code_base": request.line.Base, "_position": position,
+		}))
 	}
 
-	messages := make([]*chathistory.Message, 0, keep+len(request.line.Tail))
-	messages = append(messages, prefix[:keep]...)
 	for _, hash := range request.line.Tail {
 		messages = append(messages, f.message(hash))
 	}
