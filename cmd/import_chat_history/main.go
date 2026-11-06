@@ -28,6 +28,9 @@ import (
 // fill the disk
 const maxSpooled = 2 << 30
 
+// stalledAfter is how long the importer waits on an uploader that makes no progress
+const stalledAfter = 30 * time.Minute
+
 type job struct {
 	source string
 	path   string
@@ -112,8 +115,8 @@ func main() {
 				continue
 			}
 
-			for !*dryRun && recorder.Spooled() > maxSpooled {
-				time.Sleep(time.Second)
+			if !*dryRun {
+				waitForUploader(recorder)
 			}
 
 			if errImport := recorder.Import(call); errImport != nil {
@@ -128,20 +131,43 @@ func main() {
 	}
 
 	spooled := recorder.Spooled()
+	var errWait error
 	if !*dryRun {
 		// a large import leaves gigabytes for the uploader after the last file
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
-		if errWait := recorder.WaitUploaded(ctx); errWait != nil {
-			log.Warnf("upload did not finish: %v; the rest uploads from %s on the next run", errWait, *spoolDir)
-		}
+		errWait = recorder.WaitUploaded(ctx)
 		cancel()
 	}
 
 	recorder.Close()
+	if errWait != nil {
+		log.Errorf("upload incomplete: %v; segments still waiting upload when the importer runs again with -spool-dir %s, and rejected ones stay there with a .rejected suffix", errWait, *spoolDir)
+	}
+
 	fmt.Printf("files %d (failed %d), calls %d (skipped by -until %d, failed %d), chained %d, unresolved messages %d, bad lines %d, spooled %s in %s\n",
 		len(jobs), failedFiles, total.Calls, skipped, failedCalls, total.Chained, total.Unresolved, total.BadLines, size(spooled), time.Since(started).Round(time.Second))
-	if failedFiles > 0 || failedCalls > 0 {
+	if failedFiles > 0 || failedCalls > 0 || errWait != nil {
 		os.Exit(1)
+	}
+}
+
+// waitForUploader pauses parsing while the spool is over its limit, and exits
+// once the uploader has made no progress for half an hour, such as when
+// ClickHouse is down, leaving the spool to upload on the next run
+func waitForUploader(recorder *chathistory.Recorder) {
+	lowest := recorder.Spooled()
+	progressed := time.Now()
+	for spooled := lowest; spooled > maxSpooled; spooled = recorder.Spooled() {
+		if spooled < lowest {
+			lowest, progressed = spooled, time.Now()
+		}
+
+		if time.Since(progressed) > stalledAfter {
+			recorder.Close()
+			log.Fatalf("upload stalled with %s spooled; rerun once ClickHouse is reachable", size(spooled))
+		}
+
+		time.Sleep(time.Second)
 	}
 }
 

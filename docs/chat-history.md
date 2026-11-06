@@ -64,7 +64,7 @@ go build -o import_chat_history ./cmd/import_chat_history
 ./import_chat_history -until 2026-11-06T00:00:00-06:00   # skip calls from when the proxy started recording
 ```
 
-Re-running it is safe: `chat.requests` is a `ReplacingMergeTree` keyed by session, time and request id, so a second import of the same call collapses into the first when parts merge, and reads with `FINAL` see one row before then. An interrupted run leaves segments in `-spool-dir`, which the next run uploads first.
+Re-running it is safe: `chat.requests` is a `ReplacingMergeTree` keyed by session, time and request id, so a second import of the same call collapses into the first when parts merge, and reads with `FINAL` see one row before then. An interrupted run leaves segments in `-spool-dir`, which the next run uploads first. The importer pauses parsing while 2 GiB waits for upload and gives up when the upload makes no progress for 30 minutes. It exits nonzero when a file or call fails, when ClickHouse rejects a segment, which stays in the spool with a `.rejected` suffix, or when uploads do not finish within two hours of the last file.
 
 How each source becomes calls:
 
