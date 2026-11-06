@@ -398,6 +398,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 		helps.RetireProxyPoolPublisher(s.proxyPoolPublisher)
 		usage.StopDefault()
+		stopChatHistory()
 		s.finishQuotaAffinity(ctx, &shutdownErr)
 	})
 	return shutdownErr

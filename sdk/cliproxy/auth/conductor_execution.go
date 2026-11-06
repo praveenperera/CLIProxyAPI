@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/chathistory"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -28,6 +29,7 @@ import (
 
 func newUpstreamAttemptContext(ctx context.Context) context.Context {
 	ctx = logging.WithFreshResponseHeadersHolder(ctx)
+	ctx = chathistory.WithCapture(ctx)
 	return cliproxyexecutor.WithUpstreamAttemptTracker(ctx)
 }
 

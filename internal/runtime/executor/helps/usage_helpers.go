@@ -18,6 +18,7 @@ import (
 	"github.com/MoeForge/moego/ojson"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/chathistory"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
 	internallogging "github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
@@ -605,6 +606,7 @@ func (r *UsageReporter) EnsurePublished(ctx context.Context) {
 // observability warnings that belong to the attempt rather than to a single event.
 func (r *UsageReporter) publishAttemptRecord(ctx context.Context, record usage.Record) {
 	r.publishRecord(ctx, record)
+	chathistory.Finish(ctx, record)
 	r.warnModelSubstitution(ctx)
 }
 

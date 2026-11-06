@@ -92,6 +92,9 @@ type Config struct {
 	// Claude Code and Codex sessions with their T3 thread title. The file is only ever read.
 	T3StateDB string `yaml:"t3-state-db,omitempty" json:"t3-state-db,omitempty"`
 
+	// ChatHistory sends every proxied request and response to ClickHouse
+	ChatHistory *ChatHistoryConfig `yaml:"chat-history,omitempty" json:"chat-history,omitempty"`
+
 	// DisableCooling disables auth/model cooldown scheduling when true unless a credential or provider overrides it.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
