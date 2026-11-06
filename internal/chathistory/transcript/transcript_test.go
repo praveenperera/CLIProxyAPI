@@ -282,3 +282,127 @@ func TestCodexSplitsCallsAtUsageRecords(t *testing.T) {
 		t.Fatalf("first call output %v system %v tools %v", output, first.System, first.Tools)
 	}
 }
+
+// A message Claude Code writes itself after an answer keeps the model's answer as
+// the response, and a request whose base the file lacks keeps its real depth
+func TestClaudeCodeKeepsResponsesAndDepthAcrossGaps(t *testing.T) {
+	session := "s3"
+	hello := object{"role": "user", "content": "hello"}
+	path := writeLines(t, session+".jsonl",
+		object{"type": "api-request-blob", "sessionId": session, "hash": hashOf(t, hello), "message": hello},
+		object{"type": "api-request", "sessionId": session, "id": "r1", "params": object{"model": "claude-opus-5-5"}, "tail": []any{hashOf(t, hello)}},
+		object{"type": "assistant", "sessionId": session, "uuid": "a1", "requestRef": "r1",
+			"message": object{"id": "m1", "model": "claude-opus-5-5", "content": []any{object{"type": "text", "text": "hi"}}}},
+		object{"type": "assistant", "sessionId": session, "uuid": "a2", "parentUuid": "a1",
+			"message": object{"id": "m2", "model": "<synthetic>", "content": []any{object{"type": "text", "text": "No response requested."}}}},
+		// the base was written to a file that no longer exists
+		object{"type": "api-request", "sessionId": session, "id": "r2", "params": object{"model": "claude-opus-5-5"},
+			"base": "gone", "keep": 2, "tail": []any{hashOf(t, hello)}},
+	)
+
+	calls, stats, errParse := ClaudeCode(path)
+	if errParse != nil {
+		t.Fatal(errParse)
+	}
+
+	if len(calls) != 2 || stats.Unresolved != 2 {
+		t.Fatalf("calls %d stats %+v, want 2 calls and two unresolved messages", len(calls), stats)
+	}
+
+	encoded, _ := json.Marshal(calls[0].Response)
+	if !strings.Contains(string(encoded), `"hi"`) || calls[0].Failed {
+		t.Fatalf("first response %s failed %v, want the model's answer", encoded, calls[0].Failed)
+	}
+
+	roles := []string{}
+	for _, msg := range calls[1].Messages {
+		roles = append(roles, msg.Role())
+	}
+
+	if strings.Join(roles, ",") != "unknown,unknown,user" {
+		t.Fatalf("second call roles %v, want two placeholders before the tail", roles)
+	}
+}
+
+// An interrupted turn, a message from another agent while the model works and a
+// compaction item all stay in the history without becoming a call's output
+func TestCodexKeepsInputsOutOfResponses(t *testing.T) {
+	usage := object{"input_tokens": 10, "output_tokens": 2}
+	item := func(payload object) object { return object{"type": "response_item", "payload": payload} }
+	user := func(text string) object {
+		return item(object{"type": "message", "role": "user", "content": []any{object{"type": "input_text", "text": text}}})
+	}
+	assistant := func(text string) object {
+		return item(object{"type": "message", "role": "assistant", "content": []any{object{"type": "output_text", "text": text}}})
+	}
+
+	lines := []any{
+		object{"type": "session_meta", "payload": object{"id": "c2"}},
+		user("first"),
+		item(object{"type": "reasoning", "summary": []any{}}),
+		object{"type": "event_msg", "payload": object{"type": "turn_aborted"}},
+		user("second"),
+		assistant("working"),
+		item(object{"type": "agent_message", "content": "from another agent"}),
+		assistant("done"),
+		object{"type": "token_usage_record", "payload": object{"response_id": "resp_1", "usage": usage}},
+		object{"type": "compacted", "payload": object{"replacement_history": []any{
+			object{"type": "message", "role": "user", "content": []any{object{"type": "input_text", "text": "summary"}}},
+			object{"type": "compaction", "encrypted_content": "x"},
+		}}},
+		user("third"),
+		assistant("ok"),
+		object{"type": "token_usage_record", "payload": object{"response_id": "resp_2", "usage": usage}},
+	}
+
+	calls, _, errParse := Codex(writeLines(t, "rollout-2.jsonl", lines...))
+	if errParse != nil {
+		t.Fatal(errParse)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("%d calls, want 2", len(calls))
+	}
+
+	want := []struct{ request, output string }{
+		{"user,reasoning,user", "message,message"},
+		{"user,compaction,user", "message"},
+	}
+
+	for i, call := range calls {
+		roles := []string{}
+		for _, msg := range call.Messages {
+			roles = append(roles, msg.Role())
+		}
+
+		output, _ := call.Response.(map[string]any)["output"].([]any)
+		types := []string{}
+		for _, entry := range output {
+			types = append(types, entry.(object)["type"].(string))
+		}
+
+		if strings.Join(roles, ",") != want[i].request || strings.Join(types, ",") != want[i].output {
+			t.Fatalf("call %d request %v output %v, want %+v", i, roles, types, want[i])
+		}
+	}
+
+	// older rollouts have no usage records, and send token_count for rate limit
+	// updates too, with no usage and no call behind it
+	legacy := []any{
+		object{"type": "session_meta", "payload": object{"id": "c3"}},
+		object{"type": "event_msg", "payload": object{"type": "token_count", "info": nil}},
+		user("hi"),
+		object{"type": "event_msg", "payload": object{"type": "token_count", "info": object{"last_token_usage": usage}}},
+		assistant("hello"),
+		object{"type": "event_msg", "payload": object{"type": "token_count", "info": object{"last_token_usage": usage}}},
+	}
+
+	calls, _, errParse = Codex(writeLines(t, "rollout-3.jsonl", legacy...))
+	if errParse != nil {
+		t.Fatal(errParse)
+	}
+
+	if len(calls) != 1 || len(calls[0].Messages) != 1 {
+		t.Fatalf("%d legacy calls, want one call answering the user", len(calls))
+	}
+}

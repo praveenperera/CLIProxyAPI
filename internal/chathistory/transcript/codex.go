@@ -110,9 +110,11 @@ func (r *codexFile) read(raw []byte) {
 		r.readItem(payload)
 	case "compacted":
 		if history, ok := field(payload, "replacement_history").([]any); ok {
+			// the replacement is the history later calls send, never output, even
+			// for its compaction item
 			r.items, r.outputs, r.firstOutput = nil, nil, -1
 			for _, item := range history {
-				r.appendItem(item)
+				r.items = append(r.items, chathistory.NewMessage(item))
 			}
 		}
 	case "token_usage_record":
@@ -120,8 +122,18 @@ func (r *codexFile) read(raw []byte) {
 			r.finishCall(line, text(payload, "response_id"), field(payload, "usage"))
 		}
 	case "event_msg":
-		if !r.useRecords && text(payload, "type") == "token_count" {
-			r.finishCall(line, "", field(payload, "info", "last_token_usage"))
+		switch text(payload, "type") {
+		case "turn_aborted":
+			// an interrupted call ends with no usage; what it produced stays in the
+			// history, and the next call starts a new request
+			r.firstOutput, r.outputs = -1, nil
+		case "token_count":
+			// older rollouts also send this for rate limit updates, with no usage and
+			// no call behind it
+			usage := field(payload, "info", "last_token_usage")
+			if !r.useRecords && usage != nil && r.firstOutput >= 0 {
+				r.finishCall(line, "", usage)
+			}
 		}
 	}
 }
@@ -164,7 +176,9 @@ func (r *codexFile) appendItem(item any) {
 		r.firstOutput = len(r.items)
 	}
 
-	if r.firstOutput >= 0 {
+	// an input that arrives while the model responds, such as another agent's
+	// message, belongs to the next request, not this response
+	if r.firstOutput >= 0 && isOutput(item) {
 		r.outputs = append(r.outputs, item)
 	}
 
@@ -179,7 +193,7 @@ func isOutput(item any) bool {
 	switch {
 	case kind == "message":
 		return text(item, "role") == "assistant"
-	case kind == "agent_message", kind == "configuration_update", strings.HasSuffix(kind, "_output"):
+	case kind == "agent_message", kind == "configuration_update", kind == "compaction", strings.HasSuffix(kind, "_output"):
 		return false
 	}
 
