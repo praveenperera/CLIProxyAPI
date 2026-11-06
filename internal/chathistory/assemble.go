@@ -30,7 +30,7 @@ func assembleResponse(chunks [][]byte) assembled {
 	}
 
 	if len(events) == 1 && !isStreamEvent(events[0]) {
-		return assembled{format: detectFormat(events[0]), body: canonical(events[0]), responseID: stringAt(events[0], "id")}
+		return assembled{format: detectFormat(events[0]), body: responseBody(events[0]), responseID: stringAt(events[0], "id")}
 	}
 
 	switch detectFormat(events[0]) {
@@ -220,7 +220,7 @@ func assembleClaude(events []map[string]any) assembled {
 	}
 
 	message["content"] = orderedBlocks(blocks)
-	return assembled{format: "claude", body: canonical(message), responseID: stringAt(message, "id")}
+	return assembled{format: "claude", body: responseBody(message), responseID: stringAt(message, "id")}
 }
 
 func assembleResponses(events []map[string]any) assembled {
@@ -309,7 +309,7 @@ func assembleResponses(events []map[string]any) assembled {
 	// instructions and tools repeat the request, which is already stored
 	delete(response, "instructions")
 	delete(response, "tools")
-	return assembled{format: "openai-response", body: canonical(response), responseID: stringAt(response, "id")}
+	return assembled{format: "openai-response", body: responseBody(response), responseID: stringAt(response, "id")}
 }
 
 func assembleGemini(events []map[string]any) assembled {
@@ -346,7 +346,7 @@ func assembleGemini(events []map[string]any) assembled {
 	}
 
 	result["candidates"] = []any{candidate}
-	return assembled{format: "gemini", body: canonical(result), responseID: stringAt(result, "responseId")}
+	return assembled{format: "gemini", body: responseBody(result), responseID: stringAt(result, "responseId")}
 }
 
 // appendGeminiPart merges consecutive text parts of the same kind, since a stream
@@ -469,7 +469,7 @@ func assembleChat(events []map[string]any) assembled {
 	}
 
 	result["choices"] = []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}}
-	return assembled{format: "openai", body: canonical(result), responseID: stringAt(result, "id")}
+	return assembled{format: "openai", body: responseBody(result), responseID: stringAt(result, "id")}
 }
 
 func orderedBlocks(blocks map[int]map[string]any) []any {

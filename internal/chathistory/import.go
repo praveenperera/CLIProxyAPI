@@ -15,9 +15,11 @@ type Message struct {
 }
 
 // NewMessage canonicalizes a decoded conversation entry. It removes the entry's
-// prompt cache markers from value in place
+// prompt cache markers and opaque provider fields from value in place, so hash
+// value with ContentHash first
 func NewMessage(value any) *Message {
 	stripMessageMarkers(value)
+	dropOpaque(value)
 	content := canonical(value)
 	return &Message{m: message{role: roleOf(value), content: content, hash: hashBytes(content)}}
 }
@@ -94,7 +96,12 @@ func (r *Recorder) Import(call Call) error {
 	}
 
 	ts := requestedAt.UTC().Format(clickhouseTime)
-	request := newRequestRow(call.Event, ts, call.Format, canonicalOrNil(call.Response))
+	var response []byte
+	if call.Response != nil {
+		response = responseBody(call.Response)
+	}
+
+	request := newRequestRow(call.Event, ts, call.Format, response)
 	request.Params = string(conv.params)
 	rows := r.conversationRows(request, conv, call.SessionID, call.RequestID, ts, "", 0)
 	if errWrite := r.spool.write(rows); errWrite != nil {
