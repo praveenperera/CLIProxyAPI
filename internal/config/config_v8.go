@@ -115,6 +115,7 @@ func buildV8Paths() []configPath {
 		{"usage-statistics-enabled", "observability.usage.usage-statistics-enabled"},
 		{"redis-usage-queue-retention-seconds", "observability.usage.redis-usage-queue-retention-seconds"}, {"pprof", "observability.pprof"},
 		{"t3-state-db", "observability.usage.t3-state-db"},
+		{"chat-history", "observability.chat-history"},
 	}
 	var out []configPath
 	var walk func(reflect.Type, string, []int)

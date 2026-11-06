@@ -25,6 +25,7 @@ func (s *Service) validateForkConfig(newCfg *config.Config) bool {
 	s.cfgMu.RLock()
 	previous := s.cfg
 	s.cfgMu.RUnlock()
+	warnChatHistoryReload(previous, newCfg)
 	oldProfile, errOld := previous.QuotaAffinitySettings()
 	newProfile, _ := newCfg.QuotaAffinitySettings()
 	if errOld != nil || oldProfile != newProfile {
@@ -68,6 +69,7 @@ type quotaPoller struct {
 // initQuotaAffinity validates the quota-aware chat affinity profile, configures it on the core
 // manager, and registers the cache usage plugin before the usage dispatcher starts
 func (s *Service) initQuotaAffinity() error {
+	startChatHistory(s.cfg)
 	if _, errProfile := s.cfg.QuotaAffinitySettings(); errProfile != nil {
 		return errProfile
 	}

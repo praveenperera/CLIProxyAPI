@@ -16,6 +16,7 @@ import (
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/chathistory"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/util"
@@ -66,6 +67,7 @@ func requestLogCaptureEnabled(cfg *config.Config) bool {
 
 // RecordAPIRequest stores the upstream request metadata in Gin context for request logging.
 func RecordAPIRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
+	chathistory.CaptureRequest(ctx, info.Body)
 	if cfg == nil || cfg.CommercialMode {
 		return
 	}
@@ -196,6 +198,7 @@ func newAPIRequestLogBuilder(index int, info UpstreamRequestLog, timestamp time.
 
 // RecordAPIResponseMetadata captures upstream response status/header information for the latest attempt.
 func RecordAPIResponseMetadata(ctx context.Context, cfg *config.Config, status int, headers http.Header) {
+	chathistory.CaptureStatus(ctx, status)
 	coreexecutor.ObserveQuotaHeaders(ctx, headers)
 	logging.SetResponseHeaders(ctx, headers)
 	if !requestLogCaptureEnabled(cfg) {
@@ -226,6 +229,7 @@ func RecordAPIResponseMetadata(ctx context.Context, cfg *config.Config, status i
 
 // RecordAPIResponseError adds an error entry for the latest attempt when no HTTP response is available.
 func RecordAPIResponseError(ctx context.Context, cfg *config.Config, err error) {
+	chathistory.CaptureError(ctx, err)
 	if !requestLogCaptureEnabled(cfg) || err == nil {
 		return
 	}
@@ -251,6 +255,7 @@ func RecordAPIResponseError(ctx context.Context, cfg *config.Config, err error) 
 
 // AppendAPIResponseChunk appends an upstream response chunk to Gin context for request logging.
 func AppendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byte) {
+	chathistory.CaptureChunk(ctx, chunk)
 	if !requestLogCaptureEnabled(cfg) {
 		return
 	}
@@ -295,6 +300,7 @@ func AppendAPIResponseChunk(ctx context.Context, cfg *config.Config, chunk []byt
 
 // RecordAPIWebsocketRequest stores an upstream websocket request event in Gin context.
 func RecordAPIWebsocketRequest(ctx context.Context, cfg *config.Config, info UpstreamRequestLog) {
+	chathistory.CaptureWebsocketRequest(ctx, info.Body)
 	if !requestLogCaptureEnabled(cfg) {
 		return
 	}
@@ -388,6 +394,7 @@ func WebsocketUpgradeRequestURL(rawURL string) string {
 
 // AppendAPIWebsocketResponse stores an upstream websocket response frame in Gin context.
 func AppendAPIWebsocketResponse(ctx context.Context, cfg *config.Config, payload []byte) {
+	chathistory.CaptureWebsocketChunk(ctx, payload)
 	if !requestLogCaptureEnabled(cfg) {
 		return
 	}
@@ -419,6 +426,7 @@ func AppendCodexAPIWebsocketResponse(ctx context.Context, cfg *config.Config, pa
 
 // RecordAPIWebsocketError stores an upstream websocket error event in Gin context.
 func RecordAPIWebsocketError(ctx context.Context, cfg *config.Config, stage string, err error) {
+	chathistory.CaptureError(ctx, err)
 	if !requestLogCaptureEnabled(cfg) || err == nil {
 		return
 	}

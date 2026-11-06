@@ -1283,6 +1283,19 @@ observability:
     # sessions with their T3 thread title. The file is opened read-only.
     # t3-state-db: "~/.t3/userdata/statev2.sqlite"
 
+  # Send every proxied request and response to ClickHouse, storing each message once
+  # (see docs/chat-history.md). Rows wait in spool-dir until ClickHouse accepts them, so
+  # the proxy keeps working while ClickHouse is down. Changes need a restart.
+  # chat-history:
+  #   enabled: true
+  #   endpoint: "http://code.local:8123"
+  #   database: "chat"
+  #   user: "chat"
+  #   password-file: "~/.config/chat-history/password" # keeps the password out of this file
+  #   spool-dir: "~/.local/share/cliproxyapi/chat-history" # one server per directory
+  #   max-spool-mb: 5120 # stop recording while this much waits for upload
+  #   flush-seconds: 30 # longest a row waits before upload
+
   # Enable pprof HTTP debug server (host:port). Keep it bound to localhost for safety.
   pprof:
     enable: false
