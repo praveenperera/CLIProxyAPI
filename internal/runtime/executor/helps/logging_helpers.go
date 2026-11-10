@@ -199,6 +199,7 @@ func newAPIRequestLogBuilder(index int, info UpstreamRequestLog, timestamp time.
 // RecordAPIResponseMetadata captures upstream response status/header information for the latest attempt.
 func RecordAPIResponseMetadata(ctx context.Context, cfg *config.Config, status int, headers http.Header) {
 	chathistory.CaptureStatus(ctx, status)
+	chathistory.CaptureHeaders(ctx, headers)
 	coreexecutor.ObserveQuotaHeaders(ctx, headers)
 	logging.SetResponseHeaders(ctx, headers)
 	if !requestLogCaptureEnabled(cfg) {
@@ -333,6 +334,7 @@ func RecordAPIWebsocketRequest(ctx context.Context, cfg *config.Config, info Ups
 
 // RecordAPIWebsocketHandshake stores the upstream websocket handshake response metadata.
 func RecordAPIWebsocketHandshake(ctx context.Context, cfg *config.Config, status int, headers http.Header) {
+	chathistory.CaptureHeaders(ctx, headers)
 	coreexecutor.ObserveQuotaHeaders(ctx, headers)
 	logging.SetResponseHeaders(ctx, headers)
 	if !requestLogCaptureEnabled(cfg) {

@@ -40,6 +40,10 @@ type Event struct {
 	OutputTokens     int64
 	ReasoningTokens  int64
 
+	// RateLimits holds the response's quota headers with lowercase names, such as
+	// anthropic-ratelimit-unified-7d-utilization
+	RateLimits map[string]string
+
 	// RequestBody is the final body sent upstream, after translation
 	RequestBody []byte
 	// Chunks are the raw upstream response: one JSON body, SSE lines, or

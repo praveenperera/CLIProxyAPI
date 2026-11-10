@@ -19,7 +19,7 @@ observability:
 
 The password is read from `password-file` so it stays out of the config file and the management API's config view. On macOS, a proxy run by launchd, or an importer left running after its ssh session ends, can fail to reach a LAN address with `no route to host` while the same address works from a shell; this points to macOS Local Network privacy, and a Tailscale address avoids it. An invalid block is rejected when the config loads. A missing password file or an unwritable spool directory is logged and leaves capture off without stopping the proxy. Changing the block on a running server logs a warning and takes effect after a restart.
 
-The ClickHouse schema lives with the server that runs it; for this deployment see `ai5090/chat-history/` in the homelab repository. The tables are `chat.blobs`, `chat.nodes` and `chat.requests`, described below.
+The ClickHouse schema lives with the server that runs it; for this deployment see `ai5090/chat-history/` in the homelab repository. The tables are `chat.blobs`, `chat.nodes`, `chat.requests` and `chat.quota`, described below.
 
 ## What is stored
 
@@ -32,6 +32,7 @@ Each request re-sends the whole conversation, so storing request bodies would gr
 | Each message or Responses input item | One `blobs` row per distinct content, plus one `nodes` row per position in the session |
 | Other request fields (model, max tokens, thinking) | `requests.params` |
 | The response | `requests.response`, assembled from the stream |
+| The response's quota headers | `requests.rate_limits`, described under Subscription usage |
 
 A node's id hashes its parent node and its message, so two requests that share a prefix share its nodes, and a conversation that is rewound or edited branches from the shared part. Each `requests` row points at its last node (`leaf`) and records `message_count`. A turn that adds two messages writes two nodes however long the conversation already is.
 
@@ -49,7 +50,16 @@ A websocket can carry many turns on one attempt, and duplex Codex sessions write
 
 An OpenAI Responses request that sends only new input with `previous_response_id` continues the chain of the request that produced that response, while this process remembers it; the earlier response's output stays in that request's `response` column rather than becoming a node.
 
+## Subscription usage
+
+Two records show how much of an account's subscription limits each call used.
+
+`requests.rate_limits` maps each quota header of the call's upstream response, by lowercase name, to its value: `anthropic-ratelimit-*`, which on a subscription account includes the unified 5-hour and 7-day utilization and any per-model window, `x-codex-*`, `x-ratelimit-*` and `retry-after`. Other headers are not kept. On a websocket only the handshake has headers, so the turns of the attempt that opened the socket carry the handshake's values, and turns on a socket reused by a later attempt carry none. Codex reports its plan windows in a `codex.rate_limits` stream event instead, often with no headers on a websocket turn, so the response's last such event is kept as JSON under the `codex.rate_limits` key.
+
+`chat.quota` keeps every reply from the usage endpoints the proxy polls for routing, about once a minute per account: Claude's `/api/oauth/usage` and Codex's `/backend-api/wham/usage`. Each row has the account (`auth_id`, as in `requests`), the status code and the whole body, since routing reads only the shared 5-hour and 7-day windows and drops the rest, such as per-model limits. The rows go through the same spool and upload as the other tables, written by the poller rather than the call queue.
+
 ## Delivery
+
 
 Capture never blocks a request. The executor hands the captured buffers to a bounded queue of 64 calls when it publishes the call's usage; if the queue is full the call is dropped and counted, and the uploader logs the count. A background worker parses the call, skips content and nodes it has already written, and appends rows to per-table NDJSON segments in `spool-dir`, flushed after every call. Numbers are clamped to their column ranges, since one out-of-range value would get a whole segment rejected. A failed write cuts the segment back to its last complete row and starts a new one.
 
