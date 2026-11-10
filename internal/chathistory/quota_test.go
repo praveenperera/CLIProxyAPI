@@ -33,7 +33,8 @@ func TestQuotaReadingsReachTheSpool(t *testing.T) {
 		"Content-Type": {"application/json"},
 		"Anthropic-Ratelimit-Unified-7d-Utilization":    {"0.69"},
 		"Anthropic-Ratelimit-Unified-7d_oi-Utilization": {"0.31"},
-		"Retry-After": {"12"},
+		"Retry-After":        {"12"},
+		"X-Codex-Turn-State": {"gAAAAABq8pg7"},
 	})
 	CaptureChunk(claude, []byte(`{"type":"message","role":"assistant","content":[{"type":"text","text":"hello"}]}`))
 	Finish(claude, usage.Record{RequestID: "claude-call", AuthID: "claude-a", Provider: "claude"})
