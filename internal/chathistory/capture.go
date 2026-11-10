@@ -302,13 +302,18 @@ func CaptureHeaders(ctx context.Context, headers http.Header) {
 // credits, and the generic x-ratelimit family OpenAI-compatible upstreams send
 var rateLimitPrefixes = []string{"anthropic-ratelimit-", "x-codex-", "x-ratelimit-"}
 
+// skippedRateLimitHeaders match a prefix above but carry no quota reading.
+// x-codex-turn-state is an encrypted token of about 1 KB on every Codex
+// response, which only the provider can read and which does not compress
+var skippedRateLimitHeaders = map[string]bool{"x-codex-turn-state": true}
+
 // rateLimitHeaders returns the quota headers with lowercase names, or nil when
 // there are none. A repeated header keeps its values joined by commas
 func rateLimitHeaders(headers http.Header) map[string]string {
 	var kept map[string]string
 	for name, values := range headers {
 		lower := strings.ToLower(name)
-		if lower != "retry-after" && !hasAnyPrefix(lower, rateLimitPrefixes) {
+		if skippedRateLimitHeaders[lower] || (lower != "retry-after" && !hasAnyPrefix(lower, rateLimitPrefixes)) {
 			continue
 		}
 
