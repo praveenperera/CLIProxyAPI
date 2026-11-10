@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/chathistory"
 	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/affinity"
 	domain "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/quota"
 )
@@ -99,6 +100,13 @@ func fetchUsage(ctx context.Context, client HTTPDoer, ref affinity.CredentialRef
 	}
 	body, errRead := io.ReadAll(io.LimitReader(response.Body, maxUsageBytes+1))
 	errClose := response.Body.Close()
+	if errRead == nil && len(body) <= maxUsageBytes {
+		// keep every reply, refusals included, since the parsers below read only the
+		// windows routing needs and the rest is what usage analysis wants
+		chathistory.RecordQuotaPoll(chathistory.QuotaPoll{
+			At: received, Provider: ref.Provider(), AuthID: ref.AuthID(), StatusCode: response.StatusCode, Body: body,
+		})
+	}
 	if ctx.Err() != nil {
 		return domain.Snapshot{}, ctx.Err()
 	}

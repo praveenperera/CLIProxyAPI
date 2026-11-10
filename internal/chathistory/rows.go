@@ -1,7 +1,11 @@
 package chathistory
 
 import (
+	"bytes"
+	"encoding/json"
 	"time"
+
+	"github.com/MoeForge/moego/ojson"
 )
 
 // clickhouseTime is the DateTime64(3) text form ClickHouse parses without settings
@@ -56,6 +60,8 @@ type requestRow struct {
 	MessageCount     uint32 `json:"message_count"`
 	Params           string `json:"params"`
 	Response         string `json:"response"`
+	// omitted when empty, since ClickHouse reads a JSON null as an error for a Map
+	RateLimits map[string]string `json:"rate_limits,omitempty"`
 }
 
 // rows turns one finished call into the rows it adds. Content and nodes already
@@ -128,7 +134,43 @@ func newRequestRow(event Event, ts, format string, response []byte) requestRow {
 		OutputTokens:     max(event.OutputTokens, 0),
 		ReasoningTokens:  max(event.ReasoningTokens, 0),
 		Response:         string(response),
+		RateLimits:       withCodexRateLimits(event.RateLimits, event.Chunks),
 	}
+}
+
+// codexRateLimitsKey is the rate_limits entry holding the last codex.rate_limits
+// event of a Codex response. Codex reports its plan windows in that event, often
+// with no headers at all on a websocket turn, and the assembled response drops it
+const codexRateLimitsKey = "codex.rate_limits"
+
+// withCodexRateLimits adds the response's last codex.rate_limits event, as raw
+// JSON, to the header map. The map is the event's own copy, so it is changed in place
+func withCodexRateLimits(rateLimits map[string]string, chunks [][]byte) map[string]string {
+	marker := []byte(`"codex.rate_limits"`)
+	for i := len(chunks) - 1; i >= 0; i-- {
+		if !bytes.Contains(chunks[i], marker) {
+			continue
+		}
+
+		// an SSE chunk can hold several lines; a websocket frame is the event itself
+		lines := bytes.Split(chunks[i], []byte("\n"))
+		for j := len(lines) - 1; j >= 0; j-- {
+			line := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(lines[j]), []byte("data:")))
+			// the marker can also appear in response text, so the event's own type decides
+			if !bytes.Contains(line, marker) || !json.Valid(line) || ojson.GetBytes(line, "type").String() != codexRateLimitsKey {
+				continue
+			}
+
+			if rateLimits == nil {
+				rateLimits = map[string]string{}
+			}
+
+			rateLimits[codexRateLimitsKey] = string(line)
+			return rateLimits
+		}
+	}
+
+	return rateLimits
 }
 
 // conversationRows adds the blobs and nodes of a split request, starting its chain

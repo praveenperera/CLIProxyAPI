@@ -13,8 +13,8 @@ import (
 )
 
 // tables lists the ClickHouse tables rows are spooled for, in upload order so that
-// rows referencing blobs and nodes arrive after them
-var tables = []string{"blobs", "nodes", "requests"}
+// rows referencing blobs and nodes arrive after them; quota rows reference nothing
+var tables = []string{"blobs", "nodes", "requests", "quota"}
 
 const (
 	openSuffix   = ".ndjson.open"

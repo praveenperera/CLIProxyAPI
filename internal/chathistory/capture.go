@@ -3,6 +3,8 @@ package chathistory
 import (
 	"bytes"
 	"context"
+	"maps"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +43,11 @@ type capture struct {
 	pending []pendingRequest
 	// steerIDs holds every steer id upstream acknowledged on this socket
 	steerIDs map[string]bool
-	current  turn
+	// rateLimits holds the rate-limit headers of the latest upstream response. They
+	// live outside the turn because a websocket's handshake is the only response
+	// with headers, and every turn of the attempt that opened the socket shares it
+	rateLimits map[string]string
+	current    turn
 }
 
 // pendingRequest is a queued request frame. A steer learns its upstream id from
@@ -105,6 +111,7 @@ func CaptureRequest(ctx context.Context, body []byte) {
 	// copied because callers may reuse the buffer
 	c.pending = []pendingRequest{{body: bytes.Clone(body)}}
 	c.current = turn{}
+	c.rateLimits = nil
 }
 
 // CaptureWebsocketRequest queues a websocket request frame for the turn whose
@@ -276,6 +283,55 @@ func CaptureStatus(ctx context.Context, status int) {
 	}
 }
 
+// CaptureHeaders keeps the upstream response's rate-limit headers, the only
+// per-call reading of how much of a subscription's limits the account has used
+func CaptureHeaders(ctx context.Context, headers http.Header) {
+	c := captureFrom(ctx)
+	if c == nil {
+		return
+	}
+
+	kept := rateLimitHeaders(headers)
+	c.mu.Lock()
+	c.rateLimits = kept
+	c.mu.Unlock()
+}
+
+// rateLimitPrefixes name the response headers that report quota: Anthropic's
+// unified subscription limits and API rate limits, Codex's plan windows and
+// credits, and the generic x-ratelimit family OpenAI-compatible upstreams send
+var rateLimitPrefixes = []string{"anthropic-ratelimit-", "x-codex-", "x-ratelimit-"}
+
+// rateLimitHeaders returns the quota headers with lowercase names, or nil when
+// there are none. A repeated header keeps its values joined by commas
+func rateLimitHeaders(headers http.Header) map[string]string {
+	var kept map[string]string
+	for name, values := range headers {
+		lower := strings.ToLower(name)
+		if lower != "retry-after" && !hasAnyPrefix(lower, rateLimitPrefixes) {
+			continue
+		}
+
+		if kept == nil {
+			kept = map[string]string{}
+		}
+
+		kept[lower] = strings.Join(values, ",")
+	}
+
+	return kept
+}
+
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // CaptureError records an upstream error that has no response body
 func CaptureError(ctx context.Context, err error) {
 	if c := captureFrom(ctx); c != nil && err != nil {
@@ -298,6 +354,8 @@ func Finish(ctx context.Context, record usage.Record) {
 	c.mu.Lock()
 	done := c.current
 	c.current = turn{}
+	// copied because the next turn on a websocket shares the map
+	rateLimits := maps.Clone(c.rateLimits)
 	if done.request == nil {
 		// a call that failed before any response chunk still sent its request
 		done.request = c.popPending()
@@ -343,6 +401,7 @@ func Finish(ctx context.Context, record usage.Record) {
 		CacheWriteTokens: detail.CacheCreationTokens,
 		OutputTokens:     detail.OutputTokens,
 		ReasoningTokens:  detail.ReasoningTokens,
+		RateLimits:       rateLimits,
 		RequestBody:      done.request,
 		Chunks:           done.chunks,
 	})
