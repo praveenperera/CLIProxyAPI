@@ -660,8 +660,14 @@ func (m *Manager) ObserveQuota(lease QuotaLease, observation domain.Snapshot) bo
 	if record.ref != ref {
 		record = quotaRecord{ref: ref, windows: make(map[string]domain.Snapshot)}
 	}
-	var accepted []domain.Window
+	var accepted, reported []domain.Window
 	for _, w := range observation.Windows() {
+		// a labelled window never applies to routing, so it goes to history only and can't take
+		// one of the routing slots below from an account limit
+		if w.Scope().Label() != "" {
+			reported = append(reported, w)
+			continue
+		}
 		old, ok := record.windows[w.ID()]
 		if ok && !observation.ObservedAt().After(old.ObservedAt()) {
 			continue
@@ -675,8 +681,8 @@ func (m *Manager) ObserveQuota(lease QuotaLease, observation domain.Snapshot) bo
 	r.observations[a.ID] = record
 	// recording under these locks only touches memory and a non-blocking queue send,
 	// which keeps history in receipt order; the writer goroutine does all file I/O
-	r.history.record(a.ID, ref.Provider(), observation.ObservedAt(), accepted)
-	return len(accepted) > 0
+	r.history.record(a.ID, ref.Provider(), observation.ObservedAt(), append(accepted, reported...))
+	return len(accepted) > 0 || len(reported) > 0
 }
 
 // PollQuotaOnce performs a bounded read-only pass through authenticated provider transports

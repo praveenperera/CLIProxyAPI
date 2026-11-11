@@ -68,6 +68,10 @@ type QuotaHistoryCredential struct {
 // QuotaHistoryWindow is one provider quota window, such as seven_day or primary
 type QuotaHistoryWindow struct {
 	ID string
+	// Model is the display label of a limit that covers only one model, such as Fable for
+	// seven_day_fable, or empty for a limit on the whole account; routing never reads a
+	// labelled window
+	Model string
 	// Period is the rolling window length, or zero when unknown
 	Period time.Duration
 	// Points is sorted by observation time
@@ -85,9 +89,14 @@ type QuotaHistoryPoint struct {
 
 // quotaHistoryRecord is one JSONL line; times are unix seconds
 type quotaHistoryRecord struct {
-	AuthID    string  `json:"auth_id"`
-	Provider  string  `json:"provider"`
-	Window    string  `json:"window"`
+	AuthID   string `json:"auth_id"`
+	Provider string `json:"provider"`
+	Window   string `json:"window,omitempty"`
+	// Reported holds a labelled window's ID, such as seven_day_fable, in place of window. Older
+	// binaries require window, so they skip these lines rather than read them as account quota
+	// in their weekly fallback
+	Reported  string  `json:"reported,omitempty"`
+	Model     string  `json:"model,omitempty"`
 	Period    int64   `json:"period_seconds"`
 	T         int64   `json:"t"`
 	Remaining float64 `json:"remaining"`
@@ -103,8 +112,10 @@ type quotaHistoryPoint struct {
 
 type quotaHistorySeries struct {
 	provider string
-	period   int64
-	points   []quotaHistoryPoint
+	// model is a reported window's label; see QuotaHistoryWindow.Model
+	model  string
+	period int64
+	points []quotaHistoryPoint
 }
 
 // quotaHistoryWrite is either an append batch or a full rewrite of the log
@@ -182,8 +193,9 @@ func (h *quotaHistory) load() (bool, error) {
 				// a crash can leave one truncated final line; compaction drops it
 				skipped++
 			} else if rec.T >= cutoff {
-				s := h.seriesFor(quotaHistoryKey{rec.AuthID, rec.Window})
+				s := h.seriesFor(quotaHistoryKey{rec.AuthID, rec.windowID()})
 				s.provider = rec.Provider
+				s.model = rec.Model
 				if rec.Period > 0 {
 					s.period = rec.Period
 				}
@@ -237,8 +249,33 @@ func readQuotaHistoryLine(reader *bufio.Reader) ([]byte, error) {
 }
 
 func (r quotaHistoryRecord) valid() bool {
-	return r.AuthID != "" && r.Window != "" && r.T > 0 && r.Period >= 0 && r.ResetAt >= 0 &&
+	// a reported line needs its label, and a line names its window one way only
+	if (r.Window == "") == (r.Reported == "") || (r.Reported != "" && r.Model == "") {
+		return false
+	}
+	return r.AuthID != "" && r.T > 0 && r.Period >= 0 && r.ResetAt >= 0 &&
 		!math.IsNaN(r.Remaining) && r.Remaining >= 0 && r.Remaining <= 1
+}
+
+// windowID reads the window from either field; a labelled line written by a build that still used
+// window for it keeps its label and moves to reported on the next rewrite
+func (r quotaHistoryRecord) windowID() string {
+	if r.Reported != "" {
+		return r.Reported
+	}
+	return r.Window
+}
+
+// newQuotaHistoryRecord is one point of a series as a log line, with a labelled window's ID under
+// reported so older binaries skip it
+func newQuotaHistoryRecord(key quotaHistoryKey, s *quotaHistorySeries, p quotaHistoryPoint) quotaHistoryRecord {
+	rec := quotaHistoryRecord{AuthID: key.authID, Provider: s.provider, Model: s.model, Period: s.period, T: p.t, Remaining: p.remaining, ResetAt: p.reset}
+	if s.model != "" {
+		rec.Reported = key.window
+	} else {
+		rec.Window = key.window
+	}
+	return rec
 }
 
 func (h *quotaHistory) seriesFor(key quotaHistoryKey) *quotaHistorySeries {
@@ -253,7 +290,8 @@ func (h *quotaHistory) seriesFor(key quotaHistoryKey) *quotaHistorySeries {
 // weeklyQuota reads a credential's weekly windows from the latest recorded points, with the
 // same rules as live readings: points older than maxAge or past their reset are ignored, the
 // soonest future reset wins, and the tightest window decides remaining quota, with or without a
-// reset; unlike live observations, the log survives restarts
+// reset; unlike live observations, the log survives restarts. A window labelled with a model
+// is skipped, as live routing skips it, so a used-up Fable limit never holds back other models
 func (h *quotaHistory) weeklyQuota(authID string, now time.Time, maxAge time.Duration) windowQuota {
 	var result windowQuota
 	if h == nil {
@@ -262,7 +300,7 @@ func (h *quotaHistory) weeklyQuota(authID string, now time.Time, maxAge time.Dur
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for key, s := range h.series {
-		if key.authID != authID || s.period != int64(7*24*time.Hour/time.Second) || len(s.points) == 0 {
+		if key.authID != authID || s.model != "" || s.period != int64(7*24*time.Hour/time.Second) || len(s.points) == 0 {
 			continue
 		}
 		latest := s.points[len(s.points)-1]
@@ -311,6 +349,7 @@ func (h *quotaHistory) record(authID, provider string, observedAt time.Time, win
 		}
 		s := h.seriesFor(quotaHistoryKey{authID, w.ID()})
 		s.provider = provider
+		s.model = w.Scope().Label()
 		if period := int64(w.Period().Duration() / time.Second); period > 0 {
 			s.period = period
 		}
@@ -328,8 +367,9 @@ func (h *quotaHistory) record(authID, provider string, observedAt time.Time, win
 		for len(points) > 0 && points[0].t < cutoff {
 			points = points[1:]
 		}
-		s.points = capQuotaHistoryPoints(append(points, quotaHistoryPoint{t: t, reset: reset, remaining: value}))
-		records = append(records, quotaHistoryRecord{AuthID: authID, Provider: provider, Window: w.ID(), Period: s.period, T: t, Remaining: value, ResetAt: reset})
+		point := quotaHistoryPoint{t: t, reset: reset, remaining: value}
+		s.points = capQuotaHistoryPoints(append(points, point))
+		records = append(records, newQuotaHistoryRecord(quotaHistoryKey{authID, w.ID()}, s, point))
 	}
 	if len(records) > 0 {
 		h.enqueueLocked(quotaHistoryWrite{records: records})
@@ -383,7 +423,7 @@ func (h *quotaHistory) compactLocked(now time.Time) {
 		}
 		s.points = points
 		for _, p := range points {
-			records = append(records, quotaHistoryRecord{AuthID: key.authID, Provider: s.provider, Window: key.window, Period: s.period, T: p.t, Remaining: p.remaining, ResetAt: p.reset})
+			records = append(records, newQuotaHistoryRecord(key, s, p))
 		}
 	}
 	// a full queue leaves lastCompact unchanged so the next poll retries
@@ -510,7 +550,7 @@ func (h *quotaHistory) query(since, until time.Time) map[string]QuotaHistoryCred
 		if start >= end {
 			continue
 		}
-		window := QuotaHistoryWindow{ID: key.window, Period: time.Duration(s.period) * time.Second, Points: make([]QuotaHistoryPoint, 0, end-start)}
+		window := QuotaHistoryWindow{ID: key.window, Model: s.model, Period: time.Duration(s.period) * time.Second, Points: make([]QuotaHistoryPoint, 0, end-start)}
 		for _, p := range s.points[start:end] {
 			point := QuotaHistoryPoint{At: time.Unix(p.t, 0).UTC(), Remaining: p.remaining}
 			if p.reset > 0 {
