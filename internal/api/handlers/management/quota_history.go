@@ -33,7 +33,9 @@ type quotaHistoryCredentialEntry struct {
 }
 
 type quotaHistoryWindowEntry struct {
-	ID            string                   `json:"id"`
+	ID string `json:"id"`
+	// Model labels a limit on one model, such as Fable, and is omitted for account-wide limits
+	Model         string                   `json:"model,omitempty"`
 	PeriodSeconds int64                    `json:"period_seconds"`
 	Points        []quotaHistoryPointEntry `json:"points"`
 }
@@ -70,7 +72,7 @@ func (h *Handler) GetQuotaHistory(c *gin.Context) {
 	for _, credential := range history.Credentials {
 		entry := quotaHistoryCredentialEntry{AuthID: credential.AuthID, AuthIndex: credential.AuthIndex, Provider: credential.Provider, QuotaWeight: credential.QuotaWeight, Email: credential.Email, PlanType: credential.PlanType, Windows: make([]quotaHistoryWindowEntry, 0, len(credential.Windows))}
 		for _, window := range credential.Windows {
-			windowEntry := quotaHistoryWindowEntry{ID: window.ID, PeriodSeconds: int64(window.Period / time.Second), Points: make([]quotaHistoryPointEntry, 0, len(window.Points))}
+			windowEntry := quotaHistoryWindowEntry{ID: window.ID, Model: window.Model, PeriodSeconds: int64(window.Period / time.Second), Points: make([]quotaHistoryPointEntry, 0, len(window.Points))}
 			for _, point := range window.Points {
 				var resetAt int64
 				if !point.ResetAt.IsZero() {

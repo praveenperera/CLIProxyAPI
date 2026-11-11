@@ -121,7 +121,9 @@ Quota is observed from provider response headers and Codex events. A Codex windo
 
 Strict-chat ranking uses only the in-memory observations, which start empty after a restart. For charts, the server also records fractional remaining values per credential and window in `quota-history.jsonl` in the state directory. Points are added on the first observation, a change of at least 0.1 percentage points, a new reset time, or after 15 minutes without a stored point. Points older than 30 days are dropped when the server starts and when the log is rewritten, at most every 6 hours during polling. Each series keeps at most 8192 points. History writes are best effort: a write error is logged and does not affect dispatch or saved chats.
 
-Read the history from `GET /v8/management/quota/history`. The optional `since` and `until` query parameters are unix seconds; the defaults are the last 14 days and now. The response lists current credentials with their `auth_index` and `quota_weight`, the account `email` when the auth file has one and its `plan_type` when known, such as a Codex plan from the file or its id token, and each window's points with `t`, `remaining` as a percent, and `reset_at` (0 when unknown):
+Claude's usage reply also lists weekly limits that cover a single model, such as the Fable-only weekly limit. The reply names that model only by its display name, such as `Fable`, not by a model ID, so the server records the limit in the history as `seven_day_<model>` (`seven_day_fable`) labelled with that name, but routing never reads it. Every request, Fable's included, is ranked and blocked on the account-wide limits alone, as before. An entry in that list the server can't read is skipped; the account-wide limits still apply.
+
+Read the history from `GET /v8/management/quota/history`. The optional `since` and `until` query parameters are unix seconds; the defaults are the last 14 days and now. The response lists current credentials with their `auth_index` and `quota_weight`, the account `email` when the auth file has one and its `plan_type` when known, such as a Codex plan from the file or its id token, and each window's points with `t`, `remaining` as a percent, and `reset_at` (0 when unknown). A window on a single model also has `model`, its display name:
 
 ```json
 {
@@ -132,7 +134,9 @@ Read the history from `GET /v8/management/quota/history`. The optional `since` a
      "email": "user@example.com",
      "windows": [
        {"id": "seven_day", "period_seconds": 604800,
-        "points": [{"t": 1761400000, "remaining": 83.5, "reset_at": 1761900000}]}
+        "points": [{"t": 1761400000, "remaining": 83.5, "reset_at": 1761900000}]},
+       {"id": "seven_day_fable", "model": "Fable", "period_seconds": 604800,
+        "points": [{"t": 1761400000, "remaining": 97, "reset_at": 1761900000}]}
      ]}
   ]
 }

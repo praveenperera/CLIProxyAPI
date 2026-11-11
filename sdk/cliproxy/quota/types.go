@@ -91,6 +91,8 @@ func (p Period) CalendarKind() CalendarKind { return p.calendar }
 type Scope struct {
 	meter  string
 	models []string
+	// label is set only on a reported scope
+	label string
 }
 
 // SharedCredential constructs a credential-wide meter scope
@@ -121,12 +123,33 @@ func ModelSet(meter string, models []string) (Scope, error) {
 	return scope, nil
 }
 
+// Reported constructs a scope for a limit the provider names only by a display label, such as
+// the "Fable" on Claude's Fable-only weekly limit. A label is not a canonical model, so the
+// window never applies to routing; the quota history still records it under its label
+func Reported(meter, label string) (Scope, error) {
+	scope, err := SharedCredential(meter)
+	if err != nil {
+		return Scope{}, err
+	}
+	if !text(label, 128) {
+		return Scope{}, errors.New("invalid quota label")
+	}
+	scope.label = label
+	return scope, nil
+}
+
 // Meter returns the provider-owned meter identifier
 func (s Scope) Meter() string { return s.meter }
+
+// Label returns a reported scope's display label, or empty for a scope routing applies
+func (s Scope) Label() string { return s.label }
 
 // Models returns a copy of explicit model applicability; nil means credential-wide
 func (s Scope) Models() []string { return append([]string(nil), s.models...) }
 func (s Scope) applies(model string) bool {
+	if s.label != "" {
+		return false
+	}
 	if len(s.models) == 0 {
 		return true
 	}
@@ -222,7 +245,7 @@ func NewWindow(input WindowInput) (Window, error) {
 	if !text(input.ID, 128) || input.Scope.meter == "" {
 		return Window{}, errors.New("invalid quota window")
 	}
-	w := Window{id: input.ID, scope: Scope{input.Scope.meter, append([]string(nil), input.Scope.models...)}, period: input.Period, remaining: input.Remaining}
+	w := Window{id: input.ID, scope: input.Scope.clone(), period: input.Period, remaining: input.Remaining}
 	if input.ResetAt != nil {
 		if !validTime(*input.ResetAt) {
 			return Window{}, errors.New("invalid quota reset")
@@ -240,7 +263,11 @@ func NewWindow(input WindowInput) (Window, error) {
 func (w Window) ID() string { return w.id }
 
 // Scope returns a copy of the applicability scope
-func (w Window) Scope() Scope { return Scope{w.scope.meter, append([]string(nil), w.scope.models...)} }
+func (w Window) Scope() Scope { return w.scope.clone() }
+
+func (s Scope) clone() Scope {
+	return Scope{meter: s.meter, models: append([]string(nil), s.models...), label: s.label}
+}
 
 // Period returns the observed period without guessing missing durations
 func (w Window) Period() Period { return w.period }

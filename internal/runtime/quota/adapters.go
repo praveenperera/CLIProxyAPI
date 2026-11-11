@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v8/internal/chathistory"
@@ -201,7 +202,86 @@ func ParseClaudeUsage(ref affinity.CredentialRef, body []byte, received time.Tim
 		period, _ := domain.Rolling(item.period)
 		windows = append(windows, sharedWindow(item.name, "generation", period, reset, remainingPercent(window.Utilization), nil))
 	}
+	windows = append(windows, claudeModelLimits(payload["limits"])...)
 	return snapshot(ref, domain.ExistingUsageGET, received, windows)
+}
+
+type claudeLimit struct {
+	Group    string   `json:"group"`
+	Percent  *float64 `json:"percent"`
+	ResetsAt *string  `json:"resets_at"`
+	Scope    *struct {
+		Model *struct {
+			DisplayName string `json:"display_name"`
+		} `json:"model"`
+	} `json:"scope"`
+}
+
+// claudeModelLimits reads the weekly limits a Claude usage reply's limits list scopes to one
+// model, such as the Fable-only weekly limit, as seven_day_<model> windows. The reply names the
+// model only by display name, so each is a reported window that routing never applies. The list
+// also repeats the account-wide limits, which the reply's own fields already give. The list is
+// undocumented, so each entry is read on its own and one that can't be read, or that wouldn't
+// make a valid window, is skipped; it never costs the reply its other limits
+func claudeModelLimits(raw json.RawMessage) []domain.WindowInput {
+	var entries []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+
+	period, _ := domain.Rolling(7 * 24 * time.Hour)
+	seen := make(map[string]bool)
+	var windows []domain.WindowInput
+	for _, entry := range entries {
+		// a snapshot refuses more than 32 windows, which would drop the account limits too
+		if len(windows) >= 8 {
+			break
+		}
+
+		var limit claudeLimit
+		if json.Unmarshal(entry, &limit) != nil || limit.Group != "weekly" || limit.Scope == nil || limit.Scope.Model == nil || limit.Percent == nil {
+			continue
+		}
+
+		label := strings.TrimSpace(limit.Scope.Model.DisplayName)
+		scope, err := domain.Reported("generation", label)
+		id := "seven_day_" + windowSlug(label)
+		// a duplicate ID would fail the whole snapshot
+		if err != nil || id == "seven_day_" || seen[id] {
+			continue
+		}
+
+		var reset *time.Time
+		if limit.ResetsAt != nil {
+			if parsed, errParse := time.Parse(time.RFC3339Nano, *limit.ResetsAt); errParse == nil && parsed.Year() >= 1970 {
+				reset = &parsed
+			}
+		}
+
+		window := domain.WindowInput{ID: id, Scope: scope, Period: period, ResetAt: reset, Remaining: remainingPercent(limit.Percent)}
+		// the snapshot validates every window again, and one it refuses, such as an ID made too
+		// long by a long name, would take the account limits down with it
+		if _, errWindow := domain.NewWindow(window); errWindow != nil {
+			continue
+		}
+		seen[id] = true
+		windows = append(windows, window)
+	}
+	return windows
+}
+
+// windowSlug lowercases a display name into a window ID part: "Fable" becomes "fable"
+func windowSlug(label string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(label) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case b.Len() > 0 && !strings.HasSuffix(b.String(), "_"):
+			b.WriteByte('_')
+		}
+	}
+	return strings.TrimSuffix(b.String(), "_")
 }
 
 type codexUsageWindow struct {
