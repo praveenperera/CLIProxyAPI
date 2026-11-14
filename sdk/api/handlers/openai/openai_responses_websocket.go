@@ -1044,7 +1044,8 @@ func (h *OpenAIResponsesAPIHandler) ResponsesWebsocket(c *gin.Context) {
 				cliCtx = cliproxyexecutor.WithWebsocketInput(cliCtx, duplexInput)
 				cliCtx = cliproxyexecutor.WithWebsocketAuthCheck(cliCtx, func(authID string) bool {
 					current, ok := sessionAuthByID(authID)
-					return ok && current != nil && !current.Disabled && current.Status != coreauth.StatusDisabled
+					// a paused credential must stop taking new turns on an open socket, as a disabled one does
+					return ok && current.AcceptsRequests()
 				})
 				boundPrincipal := usage.APIKeyFromContext(cliCtx)
 				cliCtx = cliproxyexecutor.WithWebsocketTurnAuthorizer(cliCtx, func(turnPayload []byte) ([]byte, error) {

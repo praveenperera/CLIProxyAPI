@@ -47,3 +47,15 @@ func ApplyAuthWeightMetadata(auth *Auth, metadata map[string]any) error {
 	auth.Attributes[AttributeWeight] = strconv.FormatInt(weight, 10)
 	return nil
 }
+
+// RoutingPaused reports whether a non-positive weight pauses routing to the auth. A paused auth
+// gets no requests under any strategy but stays enabled, so its tokens keep refreshing and its
+// quota keeps being polled, unlike a disabled one
+func (a *Auth) RoutingPaused() bool {
+	return a != nil && authWeight(a) <= 0
+}
+
+// AcceptsRequests reports whether new requests may use the auth: it is neither disabled nor paused
+func (a *Auth) AcceptsRequests() bool {
+	return a != nil && !a.Disabled && a.Status != StatusDisabled && !a.RoutingPaused()
+}

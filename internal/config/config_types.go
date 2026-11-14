@@ -787,7 +787,7 @@ type ClaudeKey struct {
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
 	// Weight controls proportional selection under weighted-round-robin.
-	// An omitted value defaults to 1; non-positive values exclude this credential; maximum 1,000,000.
+	// An omitted value defaults to 1; 0 or less pauses this credential under every strategy; maximum 1,000,000.
 	Weight *int `yaml:"weight,omitempty" json:"weight,omitempty"`
 
 	// Prefix optionally namespaces models for this credential (e.g., "teamA/claude-sonnet-4").
@@ -912,7 +912,7 @@ type CodexKey struct {
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
 	// Weight controls proportional selection under weighted-round-robin.
-	// An omitted value defaults to 1; non-positive values exclude this credential; maximum 1,000,000.
+	// An omitted value defaults to 1; 0 or less pauses this credential under every strategy; maximum 1,000,000.
 	Weight *int `yaml:"weight,omitempty" json:"weight,omitempty"`
 
 	// Prefix optionally namespaces models for this credential (e.g., "teamA/gpt-5-codex").
@@ -1036,7 +1036,7 @@ type GeminiKey struct {
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
 	// Weight controls proportional selection under weighted-round-robin.
-	// An omitted value defaults to 1; non-positive values exclude this credential; maximum 1,000,000.
+	// An omitted value defaults to 1; 0 or less pauses this credential under every strategy; maximum 1,000,000.
 	Weight *int `yaml:"weight,omitempty" json:"weight,omitempty"`
 
 	// Prefix optionally namespaces models for this credential (e.g., "teamA/gemini-3-pro-preview").
@@ -1171,7 +1171,7 @@ type OpenAICompatibilityAPIKey struct {
 	APIKey string `yaml:"api-key" json:"api-key"`
 
 	// Weight controls proportional selection under weighted-round-robin.
-	// An omitted value defaults to 1; non-positive values exclude this credential; maximum 1,000,000.
+	// An omitted value defaults to 1; 0 or less pauses this credential under every strategy; maximum 1,000,000.
 	Weight *int `yaml:"weight,omitempty" json:"weight,omitempty"`
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.

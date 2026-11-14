@@ -116,8 +116,11 @@ func authSelectionEligibilityForRequest(ctx context.Context, opts cliproxyexecut
 	return eligibility
 }
 
+// allows reports whether a request may route to auth. A non-positive weight pauses routing
+// under every strategy while leaving the credential enabled, so refresh and quota polling
+// keep running for it
 func (e authSelectionEligibility) allows(auth *Auth) bool {
-	if auth == nil {
+	if auth == nil || auth.RoutingPaused() {
 		return false
 	}
 	if e.requiredKind != "" && auth.AuthKind() != e.requiredKind {
@@ -1493,11 +1496,11 @@ func (m *Manager) normalizeProviders(providers []string) []string {
 }
 
 // AvailableProviders returns the set of provider keys that currently have at least one
-// registered auth record that is not disabled. It is a best-effort snapshot for routing
+// registered auth record that accepts requests. It is a best-effort snapshot for routing
 // decisions and does not account for per-model cooldowns or transient runtime availability.
-// Disabled auths (Disabled flag or StatusDisabled) are excluded so routing does not target
-// providers that auth selection would refuse to use, which would otherwise cause execution
-// failures instead of falling back to lower-priority routers.
+// Disabled and paused auths are excluded so routing does not target providers that auth
+// selection would refuse to use, which would otherwise cause execution failures instead of
+// falling back to lower-priority routers.
 func (m *Manager) AvailableProviders() []string {
 	if m == nil {
 		return nil
@@ -1507,7 +1510,7 @@ func (m *Manager) AvailableProviders() []string {
 	seen := make(map[string]struct{}, len(m.auths))
 	out := make([]string, 0, len(m.auths))
 	for _, auth := range m.auths {
-		if auth == nil || auth.Disabled || auth.Status == StatusDisabled {
+		if !auth.AcceptsRequests() {
 			continue
 		}
 		provider := canonicalSchedulingProvider(auth.Provider)
@@ -1523,9 +1526,9 @@ func (m *Manager) AvailableProviders() []string {
 	return out
 }
 
-// HasProviderAuth reports whether at least one non-disabled auth record is registered for
-// the provider. Disabled auths (Disabled flag or StatusDisabled) are excluded to match the
-// behavior of auth selection, which refuses to pick disabled credentials.
+// HasProviderAuth reports whether at least one auth record that accepts requests is registered
+// for the provider. Disabled and paused auths are excluded to match auth selection, which
+// refuses to pick them.
 func (m *Manager) HasProviderAuth(provider string) bool {
 	if m == nil {
 		return false
@@ -1537,7 +1540,7 @@ func (m *Manager) HasProviderAuth(provider string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, auth := range m.auths {
-		if auth == nil || auth.Disabled || auth.Status == StatusDisabled {
+		if !auth.AcceptsRequests() {
 			continue
 		}
 		if canonicalSchedulingProvider(auth.Provider) == targetKey {

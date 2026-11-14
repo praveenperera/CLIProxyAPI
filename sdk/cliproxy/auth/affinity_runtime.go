@@ -266,7 +266,7 @@ func (m *Manager) validateAffinityAuth(ctx context.Context, ref affinity.Credent
 	if a.Disabled || a.Status == StatusDisabled {
 		return nil, nil, affinity.NewError(affinity.CredentialDisabled, time.Time{})
 	}
-	if !authSelectionEligibilityForRequest(ctx, opts).allows(a) || authWeight(a) <= 0 {
+	if !authSelectionEligibilityForRequest(ctx, opts).allows(a) {
 		return nil, nil, affinity.NewError(affinity.CredentialDisabled, time.Time{})
 	}
 	if !m.authSupportsRouteModel(registry.GetGlobalRegistry(), a, model) {
@@ -322,7 +322,7 @@ func (m *Manager) coldAffinityAuth(ctx context.Context, providers []string, mode
 		}
 		candidates = append(candidates, candidate)
 		// the same eligibility as ranking, without the highest-tier restriction
-		if authWeight(a) > 0 && !view.Denied() {
+		if !view.Denied() {
 			usable = append(usable, a.ID)
 		}
 		auths[a.ID] = a
