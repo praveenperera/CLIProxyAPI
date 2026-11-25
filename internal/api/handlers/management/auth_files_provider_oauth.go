@@ -220,6 +220,8 @@ func (h *Handler) RequestAnthropicToken(c *gin.Context) {
 		// Create token storage
 		tokenStorage := anthropicAuth.CreateTokenStorage(bundle)
 		metadata := map[string]any{"email": tokenStorage.Email}
+		// a re-login merges the old credential's metadata, so an unset provenance would keep the old token's
+		metadata["oauth_provenance"] = tokenStorage.OAuthProvenance
 		if tokenStorage.AccountUUID != "" {
 			metadata["account_uuid"] = tokenStorage.AccountUUID
 		}
@@ -402,6 +404,8 @@ func (h *Handler) RequestCodexToken(c *gin.Context) {
 				"plan_type": planType,
 			},
 		}
+		// a re-login merges the old credential's metadata, so an unset provenance would keep the old token's
+		record.Metadata["oauth_provenance"] = tokenStorage.OAuthProvenance
 		savedPath, okSaved := h.commitAndCompleteBuiltinOAuthSession(ctx, state, "codex", sessionProxyURL, record, "Failed to save authentication tokens", true)
 		if !okSaved {
 			return
